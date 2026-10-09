@@ -1,0 +1,260 @@
+# Notification System: working notes
+
+Private study and planning notes for the challenge. They are **not** the deliverable.
+The deliverable is `DESIGN.md` (in this folder), which we write at the end from the decision log below.
+
+Source: *System Design Interview Vol. 1*, Chapter 10 (PDF pages 151-168), plus the challenge brief.
+
+---
+
+## 0. Rules of the challenge (re-read before every milestone)
+
+| Rule | What it means for us |
+|---|---|
+| Must build and pass tests | Never commit a red build. CI-style check (`npm test && npm run build`) before every commit. |
+| Comprehensive tests for core logic | Core = idempotency, retry/backoff, opt-in check, rate limiter, worker state machine. Not getters. |
+| Elegant design (APOSD) | Deep modules, small interfaces, hide complexity. Few, meaningful abstractions. |
+| Correct error handling | Distinguish *retryable* (5xx, timeout) from *permanent* (invalid token, 4xx). Never swallow errors. |
+| Concurrency only if needed | Worker concurrency = RabbitMQ `prefetch`. No hand-rolled thread pools. |
+| Avoid overengineering | No microservice-per-channel, no service mesh, no Kubernetes. One codebase, two processes (api, worker). |
+| Avoid AI slop | No comment on every function. No boilerplate abstractions. Delete unused code. Comments explain *why*. |
+| **Any undocumented code is assumed understood by me** | If I don't understand something the AI wrote, add a `// NOTE(not fully understood): ...` comment or rewrite it simpler. |
+| Nice to have | Logging, metrics, easy deployment, timeouts, right-sized pools, circuit breakers. |
+| Submission | Folder named after the problem (`/notification-system`), with `DESIGN.md` inside covering **choices, trade-offs, and how AI was used**. |
+
+**Extra requirements from the interviewers (verbal):**
+- **Idempotency is very important.**
+- Use **RabbitMQ or Kafka**: we pick **RabbitMQ** (see D-02).
+- **Dockerize everything** (`docker compose up` runs the whole system).
+- **Observability in Grafana.**
+
+> Keep a running "How I used AI" log (section 9). It is a required part of `DESIGN.md`.
+
+---
+
+## 1. Exercise scope (Chapter 10, Step 1)
+
+Requirements from the book's interviewer Q&A:
+
+| Question | Answer in the book | Implication |
+|---|---|---|
+| Notification types | Push, SMS, email | 3 channel types |
+| Real-time? | **Soft** real-time. A slight delay under load is OK | Queues as buffers are acceptable |
+| Devices | iOS, Android, laptop/desktop | Push splits into iOS / Android (/ web). The book has separate queues for iOS and Android |
+| Triggers | Client apps **and** scheduled server-side | Need a send API **and** a scheduler (`scheduled_at`) |
+| Opt-out | Yes. Opted-out users receive nothing | Check settings before every send |
+| Volume | 10M push + 1M SMS + 5M email per day | ~16M/day, about **185/s average**, so plan for roughly 10x peaks (about 2k/s) |
+
+Back-of-the-envelope (Chapter 2 style), to put in `DESIGN.md`:
+- 16M/day / 86,400 s = about 185 notifications/s average. Peak at 10x = about 1.9k/s.
+- Push is about 62% of the traffic, email about 31%, SMS about 6%. This is a reason for **per-channel queues and per-channel worker scaling**.
+- Queue payload about 1 KB, so a 1M backlog is about 1 GB. Fine for RabbitMQ.
+- Notification log at about 16M rows/day: partition by day, or archive (a trade-off to mention, not to build).
+
+**Out of scope** (say so explicitly in `DESIGN.md`): real FCM/APNS/Twilio/SendGrid accounts (we mock providers behind an interface), analytics UI, multi-region.
+
+---
+
+## 2. Book concepts to apply and where
+
+This is the checklist of "important concepts of the book". Every row must end up as a decision in the log (section 3) and as a section in `DESIGN.md`.
+
+| # | Concept (book) | Where it applies | Milestone |
+|---|---|---|---|
+| C1 | **Decouple with message queues**: queues remove dependencies between components and act as buffers during spikes | API to queue to worker | M3 |
+| C2 | **One queue per notification type**: an outage in one third party does not affect the others | Queues: `push.ios`, `push.android`, `sms`, `email` | M3 |
+| C3 | **Remove SPOF and scale horizontally**: stateless API servers, move DB and cache out of the server | Stateless `api` and `worker` containers; Postgres and Redis separate | M1, M3 |
+| C4 | **Scale workers independently** (bottleneck: calling third parties is slow) | `docker compose up --scale worker=N`; `prefetch` | M4 |
+| C5 | **Third-party extensibility**: easy to plug and unplug a provider (FCM unavailable in China, etc.) | `ChannelProvider` interface plus registry; mock providers | M4 |
+| C6 | **Contact-info gathering flow** (users and devices tables, a user has many devices) | `POST /users`, `POST /users/:id/devices` | M2 |
+| C7 | **Don't lose data**: persist to a notification log DB and retry. "Notifications can be delayed or reordered, but never lost" | `notifications` table written **before** publishing (outbox) | M2, M3 |
+| C8 | **Exactly-once is impossible**: aim for at-least-once delivery plus **dedupe by event ID** | Idempotency (section 4), the core of the project | M5 |
+| C9 | **Retry mechanism**: on failure put it back in the queue a predefined number of times, then alert | Retry with backoff, DLQ, alert metric | M6 |
+| C10 | **Notification templates**: consistent format, fewer mistakes | `templates` table plus a tiny renderer (`{{var}}`) | M7 |
+| C11 | **Notification settings / opt-in** (`user_id, channel, opt_in`) checked before sending | `notification_settings` table | M7 |
+| C12 | **Rate limiting per user** (frequency capping) | Redis-based limiter (token bucket or fixed window, see Ch. 4) | M8 |
+| C13 | **Security**: only authenticated clients can call the API (appKey/appSecret) | API key plus secret check on the send API | M9 |
+| C14 | **Monitor queued notifications**: queue depth is the key metric, because a large number means the workers are too slow | RabbitMQ metrics in Grafana, plus our own metrics | M10 |
+| C15 | **Event tracking** (sent / failed / delivered / ...) | Status transitions persisted plus counters | M5, M10 |
+| C16 | **Cache** user info, device info, templates | Redis cache-aside | M7 |
+| C17 | **Scheduled triggers** (server-side) | `scheduled_at` plus scheduler loop | M11 (optional) |
+| C18 | Validation (emails, phone numbers) in the notification server | Zod schemas at the API edge | M2 |
+
+---
+
+## 3. Decision log (becomes `DESIGN.md`)
+
+Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we decide something.
+
+### D-01: TypeScript on Node.js (Fastify)
+- **Why:** my choice. Fastify is small, fast, and has first-class schema validation. Strong typing helps model the notification state machine.
+- **Trade-off:** single-threaded, which is fine because the work is I/O-bound (network calls to providers).
+
+### D-02: RabbitMQ over Kafka
+- **Why:** the workload is a **task queue** (do this send once, retry on failure, route per channel). RabbitMQ gives us per-queue retry via **dead-letter exchanges with TTL**, per-message ack/nack, `prefetch` for backpressure, simple routing, and built-in Prometheus metrics (queue depth). Easier to learn and operate.
+- **Trade-off:** no replay of old messages and lower raw throughput ceiling than Kafka. At about 2k/s peak this is a non-issue. If we needed replay or event sourcing, Kafka would win. Mention this in the interview.
+- **Book ref:** Fig. 10-10: one queue per notification type.
+
+### D-03: PostgreSQL as source of truth, Redis for cache and rate limiting
+- **Why:** the notification log must be durable (C7). Postgres gives **unique constraints** for idempotency and transactions for the outbox. Redis gives fast atomic counters for rate limiting and cache-aside.
+- **Trade-off:** two stores to operate. Redis loss must degrade gracefully (cache miss and fail-open rate limit, to be decided).
+
+### D-04: Mock providers behind a `ChannelProvider` interface
+- **Why:** no real credentials needed. Interface keeps providers swappable (C5). Mocks can inject latency and failures (chaos) so retry, circuit breaker, and dashboards can be demonstrated.
+
+### D-05: Transactional outbox (DB write and publish are not atomic otherwise)
+- **Why:** if we write to the DB and then publish, a crash in between loses the notification (violates C7). If we publish first, we can send something we never recorded. The outbox row is written in the same transaction as the notification, and a relay publishes it.
+- **Trade-off:** extra table plus relay loop. **Simpler alternative:** the API writes the notification as `PENDING`, publishes, and a *reconciler* re-publishes stale `PENDING` rows. Decide in M3 (leaning toward the reconciler as the simpler option, with the same guarantee).
+
+*(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
+
+---
+
+## 4. Idempotency (the focus topic)
+
+Definition: performing the same operation more than once has the same effect as performing it once.
+Book position: **exactly-once delivery is impossible** (a crash after the provider call but before the ack/DB write cannot be distinguished from a crash before it). So we build **at-least-once delivery + idempotent processing = effectively once**, and we are honest about the residual window.
+
+Idempotency has to be handled at **three layers**:
+
+### Layer 1: Ingress (API): "the caller retried the request"
+- Caller sends `Idempotency-Key` header (or `request_id` in the body).
+- `notifications` has `UNIQUE (client_id, idempotency_key)`.
+- `INSERT ... ON CONFLICT DO NOTHING`. On conflict, return the **existing** notification (same `id`, `200`/`202`), not a new one and not an error.
+- Same key with a **different payload**: return `422` (hash the payload and compare).
+- Tests: same key twice gives one row and one message. Concurrent requests with the same key give exactly one row (race).
+
+### Layer 2: Queue consumer: "RabbitMQ delivered the message twice"
+At-least-once means redelivery will happen (worker crash before ack, network blip, requeue on nack).
+- Worker claims the notification with an **atomic state transition**:
+  `UPDATE notifications SET status='SENDING', attempts=attempts+1 WHERE id=$1 AND status IN ('PENDING','RETRYING') RETURNING *`
+- If 0 rows come back, another worker is handling it, or it is already `SENT`, so **ack and discard** (this is the book's "seen before, so discard").
+- Only one worker can win the claim, so there are no duplicate sends from concurrent consumers.
+- Tests: deliver the same message twice (sequentially and concurrently), provider called once.
+
+### Layer 3: Provider call: "we sent it but didn't record it"
+- Residual window: provider call succeeded, then the worker crashed before writing `SENT`. On redelivery the state is `SENDING`, which is ambiguous.
+- Mitigations (document the trade-off in `DESIGN.md`):
+  1. Pass `notification.id` as the **provider-side idempotency key** where the provider supports it (Twilio/FCM-style). The mock provider will implement dedupe by key to demonstrate it.
+  2. A `SENDING` row older than a timeout (lease expiry) can be re-claimed. This accepts a **possible duplicate** over a **guaranteed loss**. The book says never lose, so we choose duplicate over loss.
+- Tests: the crash-after-send scenario with a mock provider that dedupes on key (one delivery) and one that does not (a documented duplicate).
+
+### State machine
+```
+PENDING -> SENDING -> SENT
+              |
+              +-> RETRYING -> SENDING ... (up to MAX_ATTEMPTS)
+              |
+              +-> FAILED (permanent error or attempts exhausted, goes to DLQ)
+         SKIPPED_OPT_OUT / SKIPPED_RATE_LIMITED (terminal, recorded for tracking)
+```
+Transitions are enforced in **one module** (deep module, APOSD). Nothing else mutates `status`.
+
+---
+
+## 5. Architecture (target, based on book Fig. 10-14)
+
+```
+Service 1..N --POST /v1/notifications (auth, rate-limit, validate, idempotency)--> API (stateless, xN)
+                                    |  Postgres (users, devices, settings, templates, notifications log)
+                                    |  Redis (cache, rate limit)
+                                    v
+                      RabbitMQ  [push.ios] [push.android] [sms] [email]   (+ retry queues + DLQ)
+                                    |
+                                    v
+                            Workers (xN, per channel) --> Provider (mock APNS / FCM / SMS / Email)
+                                    |
+                            Prometheus <- /metrics (api, worker, rabbitmq)  ->  Grafana
+```
+
+Planned layout:
+```
+notification-system/
+  DESIGN.md              <- the deliverable (written at the end)
+  NOTES.md               <- this file (private; decide at the end whether to keep it)
+  docker-compose.yml
+  Dockerfile
+  src/
+    api/                 <- HTTP layer (thin)
+    worker/              <- consumers (thin)
+    core/                <- notification state machine, idempotency, retry policy (deep modules)
+    providers/           <- ChannelProvider + mocks
+    infra/               <- db, redis, rabbit clients, config, metrics
+  test/
+  observability/         <- prometheus.yml, grafana provisioning + dashboards JSON
+```
+
+---
+
+## 6. Milestones (each is a small, learnable, committable step)
+
+Each milestone has: **Goal / Concepts / Done when**. We do them one at a time, and I explain the concept first, then we code, then I should be able to explain the code (see Rules).
+
+| # | Milestone | Concepts | Done when |
+|---|---|---|---|
+| **M0** | Repo and notes (this file) | rules | repo pushed, `NOTES.md` agreed |
+| **M1** | **Skeleton in Docker**: TS project, Fastify `/health`, Dockerfile, compose with Postgres, Redis, RabbitMQ, config via env, structured logs (pino) | C3 | `docker compose up` gives a healthy API; `npm test` runs a first test |
+| **M2** | **Data model and contact flow**: migrations, `users`, `devices`, `notification_settings`; `POST /users`, `POST /users/:id/devices`; validation | C6, C7, C18 | users/devices can be created; invalid email/phone rejected (tested) |
+| **M3** | **Send API and queues**: `POST /v1/notifications` writes `PENDING` row and publishes to the per-channel queue (+ reconciler or outbox) | C1, C2, C7, D-05 | a request produces a row and a message in the right queue; crash-between-write-and-publish is recovered (tested) |
+| **M4** | **Workers and providers**: consumer per channel, `ChannelProvider` interface, mock providers with configurable latency/failure, `prefetch` | C4, C5 | notification ends `SENT`; scale to N workers works |
+| **M5** | **Idempotency (3 layers)** + state machine | C8, C15 | all section 4 tests pass (duplicates, races, redelivery, crash-after-send) |
+| **M6** | **Retries and DLQ**: backoff via TTL/dead-letter queues, error classification (retryable vs permanent), max attempts, alert counter, **timeouts and circuit breaker** around providers | C9 | flaky provider eventually succeeds; poison message ends in DLQ and `FAILED`; breaker opens and closes (tested) |
+| **M7** | **Templates, settings, cache**: template rendering, opt-in check before send, Redis cache-aside | C10, C11, C16 | opted-out user gets `SKIPPED_OPT_OUT`; template renders with params |
+| **M8** | **Rate limiting** per user and channel | C12 | N+1th notification gets `SKIPPED_RATE_LIMITED` (tested incl. concurrency) |
+| **M9** | **API authentication** (appKey/appSecret) | C13 | unauthenticated call gives 401 |
+| **M10** | **Observability**: `prom-client` metrics in api/worker, Prometheus, Grafana provisioned dashboards (as code) | C14, C15 | dashboard (see section 7) shows live data after a load run, with no manual setup |
+| **M11** | *(optional)* **Scheduled notifications** | C17 | `scheduled_at` in the future is sent at that time |
+| **M12** | **Load/chaos demo script** plus pool/timeout tuning | defensive design | script that shows queue depth rising and draining in Grafana |
+| **M13** | **Write `DESIGN.md`**, README quickstart, final cleanup (remove AI slop, check every file has meaningful comments) | all | a reviewer can run it in 2 commands and understand the choices |
+
+Order note: M5 (idempotency) is deliberately early. It shapes the schema and the worker, so retrofitting is expensive.
+
+---
+
+## 7. Observability plan (Grafana)
+
+Stack: `prom-client` in api and worker, RabbitMQ built-in Prometheus plugin, Prometheus, Grafana (datasource and dashboard **provisioned from files**, so `docker compose up` needs no clicks).
+
+Metrics (name them consistently, with low-cardinality labels):
+- `notifications_accepted_total{channel}`, `notifications_deduplicated_total{layer}` (**shows idempotency working**)
+- `notifications_sent_total{channel}`, `notifications_failed_total{channel,reason}`, `notifications_skipped_total{reason}`
+- `notification_send_duration_seconds{channel}` (histogram), `notification_end_to_end_seconds{channel}` (accepted to sent)
+- `provider_circuit_state{channel}`, `notification_retries_total{channel}`
+- `rabbitmq_queue_messages{queue}` (**the book's key metric: queued notifications**), DLQ depth
+- API: request rate, latency, error rate
+
+Dashboard rows: Throughput / Queue depth and DLQ / Latency / Errors and retries / Idempotency (duplicates caught) / Circuit breakers.
+Alerts (document, optionally provision): DLQ depth > 0, queue depth growing for 5 min.
+
+---
+
+## 8. Testing strategy
+
+- **Unit (most of the value):** state machine transitions, retry/backoff policy, error classification, template rendering, rate-limit logic, idempotency decision logic. Use in-memory fakes for ports (repository, publisher, provider).
+- **Integration (few, high value):** real Postgres and RabbitMQ via Testcontainers or the compose services: the idempotency race, the redelivery case, the crash-between-write-and-publish case.
+- **Not tested:** framework wiring, trivial mappers.
+- Test names state the behavior ("does not send twice when the same message is redelivered").
+- Tooling: Vitest.
+
+---
+
+## 9. "How I used AI" log (feeds `DESIGN.md`)
+
+Be honest and specific. Keep appending.
+
+- 2026-10-09: used Claude Code to read Ch. 10, extract concepts, and draft these notes and the milestone plan. I reviewed and chose the stack (TypeScript; RabbitMQ per Claude's recommendation).
+- *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
+
+---
+
+## 10. Interview prep: questions I must be able to answer
+
+- Why can't we have exactly-once delivery? What do we guarantee instead?
+- Walk through what happens if a worker crashes (a) before the provider call, (b) after the call but before the ack.
+- Why RabbitMQ and not Kafka? When would you switch?
+- How do you avoid losing a notification between the DB write and the publish?
+- How do retries work? What is retryable vs permanent? What stops a retry storm? (backoff, jitter, circuit breaker)
+- How does the system behave when SMS provider is down? (isolated queue, breaker, backlog grows, other channels fine)
+- How would you scale 10x? Where is the bottleneck? (workers, then the DB log, then RabbitMQ)
+- Rate limiter algorithm and its failure mode if Redis is down?
+- What would you do next with more time?

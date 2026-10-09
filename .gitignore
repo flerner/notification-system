@@ -1,0 +1,5 @@
+*:Zone.Identifier
+.env
+node_modules/
+.DS_Store
+*.pdf
