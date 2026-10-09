@@ -1,7 +1,9 @@
+import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { runHealthChecks } from "../src/infra/health.js";
 import { buildServer } from "../src/api/server.js";
 import { loadConfig } from "../src/infra/config.js";
+import { InMemoryUserRepository } from "./fakes.js";
 
 const up = { name: "up", check: async () => {} };
 const down = { name: "down", check: async () => { throw new Error("boom"); } };
@@ -26,11 +28,11 @@ describe("runHealthChecks", () => {
 
 describe("GET /health", () => {
   it("returns 200 when healthy and 503 when a dependency is down", async () => {
-    const healthy = buildServer({ logLevel: "silent", healthChecks: [up] });
-    expect((await healthy.inject("/health")).statusCode).toBe(200);
+    const healthy = buildServer({ logLevel: "silent", healthChecks: [up], users: new InMemoryUserRepository() });
+    expect((await request(healthy).get("/health")).status).toBe(200);
 
-    const unhealthy = buildServer({ logLevel: "silent", healthChecks: [down] });
-    expect((await unhealthy.inject("/health")).statusCode).toBe(503);
+    const unhealthy = buildServer({ logLevel: "silent", healthChecks: [down], users: new InMemoryUserRepository() });
+    expect((await request(unhealthy).get("/health")).status).toBe(503);
   });
 });
 

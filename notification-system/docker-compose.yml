@@ -23,6 +23,8 @@ services:
       POSTGRES_USER: notif
       POSTGRES_PASSWORD: notif
       POSTGRES_DB: notifications
+    ports:
+      - "5432:5432" # exposed so integration tests on the host can reach it
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

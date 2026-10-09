@@ -8,6 +8,7 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   RABBITMQ_URL: z.string().url(),
+  MIGRATIONS_DIR: z.string().default("migrations"),
 });
 
 export type Config = z.infer<typeof schema>;

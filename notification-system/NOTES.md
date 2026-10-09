@@ -86,8 +86,8 @@ This is the checklist of "important concepts of the book". Every row must end up
 
 Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we decide something.
 
-### D-01: TypeScript on Node.js (Fastify)
-- **Why:** my choice. Fastify is small, fast, and has first-class schema validation. Strong typing helps model the notification state machine.
+### D-01: TypeScript on Node.js (Express 5)
+- **Why:** Express is the framework I use daily, so I can explain and defend every line of the HTTP layer (the brief penalises code I do not understand). Express 5 forwards async errors to the error middleware. Fastify was the first choice and was swapped out in M2; the HTTP layer was only three files, and everything else is framework-independent. Strong typing helps model the notification state machine.
 - **Trade-off:** single-threaded, which is fine because the work is I/O-bound (network calls to providers).
 
 ### D-02: RabbitMQ over Kafka
@@ -105,6 +105,22 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 ### D-05: Transactional outbox (DB write and publish are not atomic otherwise)
 - **Why:** if we write to the DB and then publish, a crash in between loses the notification (violates C7). If we publish first, we can send something we never recorded. The outbox row is written in the same transaction as the notification, and a relay publishes it.
 - **Trade-off:** extra table plus relay loop. **Simpler alternative:** the API writes the notification as `PENDING`, publishes, and a *reconciler* re-publishes stale `PENDING` rows. Decide in M3 (leaning toward the reconciler as the simpler option, with the same guarantee).
+
+### D-06: Plain SQL migrations with a tiny runner (no migration library)
+- **Why:** one table-creating file per change, applied in order, tracked in `schema_migrations`, one transaction per file. A Postgres advisory lock makes concurrent api replicas take turns. About 40 lines, nothing to learn.
+- **Trade-off:** no down-migrations and no tooling. Migrations run on api startup, which delays boot; a separate migrate job would be the next step in production.
+
+### D-07: Repository interface for data access
+- **Why:** the HTTP layer depends on `UserRepository`, not on Postgres. API validation tests use an in-memory fake; SQL behavior (constraints, upsert) is tested against real Postgres.
+- **Trade-off:** one extra file and a fake to keep in sync. The Postgres test guards against the fake drifting.
+
+### D-08: Device registration is an idempotent upsert keyed by token
+- **Why:** APNS/FCM tokens are unique per app install, so `UNIQUE(token)` plus `ON CONFLICT DO UPDATE` makes clients' retries safe, and a token that moves to another account (logout/login) follows the new user instead of failing. This is the first application of the idempotency principle (section 4).
+- **Trade-off:** a token can silently change owner; acceptable because the latest registration is the truth.
+
+### D-09: Validation at the edge with Zod; ids are strings
+- E.164 phones, lowercased emails, at least one contact. Bigint ids are strings in JSON to avoid precision loss. 409 for duplicates, 404 for unknown users, 400 for validation.
+- `notification_settings` moved from M2 to M7 (nothing uses it before).
 
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
@@ -167,22 +183,33 @@ Service 1..N --POST /v1/notifications (auth, rate-limit, validate, idempotency)-
                             Prometheus <- /metrics (api, worker, rabbitmq)  ->  Grafana
 ```
 
-Planned layout:
+Code layout: **by feature, not by technical layer** (no global `models/`, `services/`, `routes/`).
 ```
 notification-system/
   DESIGN.md              <- the deliverable (written at the end)
   NOTES.md               <- this file (private; decide at the end whether to keep it)
   docker-compose.yml
   Dockerfile
+  migrations/            <- plain SQL, applied in filename order at api startup
   src/
-    api/                 <- HTTP layer (thin)
-    worker/              <- consumers (thin)
-    core/                <- notification state machine, idempotency, retry policy (deep modules)
-    providers/           <- ChannelProvider + mocks
-    infra/               <- db, redis, rabbit clients, config, metrics
-  test/
-  observability/         <- prometheus.yml, grafana provisioning + dashboards JSON
+    api/                 <- entry point 1, HTTP only: main.ts, server.ts, one routes file per feature
+    worker/              <- entry point 2, queue consumers (M4)
+    users/               <- feature: contacts and devices (repository, domain errors)
+    notifications/       <- feature: the core. State machine, repository, send flow,
+                            idempotency, retry policy (M3-M6)
+    providers/           <- top level: ChannelProvider interface, mocks, circuit breaker (M4, M6).
+                            Not under notifications/ because workers and tests use it on its own.
+    infra/               <- technical plumbing, no business logic: config, db, migrate,
+                            health, later rabbit/redis/metrics
+  test/                  <- mirrors src/
+  observability/         <- prometheus.yml, grafana provisioning + dashboards JSON (M10)
 ```
+Rules:
+1. Dependencies point one way: `api`/`worker` -> feature folders -> `infra`. Features never import from `api` or `worker`.
+2. Routes are thin: validate input, call a feature, map the result to a status code. No SQL or business rules in `api/`.
+3. A folder is a module with a small interface (APOSD deep module). Callers depend on e.g. `UserRepository`, not on how it is stored.
+4. No empty layers: a service class exists only where there is real logic to put in it (`notifications/` yes, `users/` no).
+5. Two processes, one codebase: `api` and `worker` share the feature folders but have separate entry points and Docker commands.
 
 ---
 
@@ -243,6 +270,7 @@ Alerts (document, optionally provision): DLQ depth > 0, queue depth growing for 
 Be honest and specific. Keep appending.
 
 - 2026-10-09: used Claude Code to read Ch. 10, extract concepts, and draft these notes and the milestone plan. I reviewed and chose the stack (TypeScript; RabbitMQ per Claude's recommendation).
+- - 2026-10-09: M1 (Docker skeleton) and M2 (users/devices) generated with Claude Code. I asked for the `withTimeout` explanation and had a comment added; I reviewed the design choices D-06 to D-09.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---
