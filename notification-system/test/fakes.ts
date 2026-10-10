@@ -47,7 +47,7 @@ export class InMemoryUserRepository implements UserRepository {
 }
 
 export class InMemoryNotificationRepository implements NotificationRepository {
-  rows: (Notification & { publishedAt: Date | null })[] = [];
+  rows: (Notification & { publishedAt: Date | null; sentAt?: Date; lastError?: string })[] = [];
 
   async insertPending(rows: NewNotification[]): Promise<Notification[]> {
     const created = rows.map((r, i) => ({
@@ -63,6 +63,19 @@ export class InMemoryNotificationRepository implements NotificationRepository {
 
   async markPublished(ids: string[]): Promise<void> {
     for (const r of this.rows) if (ids.includes(r.id)) r.publishedAt = new Date();
+  }
+
+  async findById(id: string): Promise<Notification | null> {
+    return this.rows.find((r) => r.id === id) ?? null;
+  }
+
+  async markSent(id: string): Promise<void> {
+    const r = this.rows.find((x) => x.id === id)!;
+    Object.assign(r, { status: "SENT", sentAt: new Date(), lastError: undefined });
+  }
+
+  async markFailed(id: string, error: string): Promise<void> {
+    Object.assign(this.rows.find((x) => x.id === id)!, { status: "FAILED", lastError: error });
   }
 
   // The fake ignores the age threshold: tests decide what is "old enough" by calling it.

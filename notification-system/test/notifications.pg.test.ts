@@ -55,6 +55,18 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     expect((await repo.findUnpublished(0, 10)).map((s) => s.id)).toEqual([b!.id]);
   });
 
+  it("records the delivery outcome: SENT, or FAILED with the error", async () => {
+    const [a, b] = await repo.insertPending([row(), row()]);
+    await repo.markSent(a!.id);
+    await repo.markFailed(b!.id, "provider unavailable");
+    const { rows } = await pool.query("SELECT id, status, sent_at IS NOT NULL AS sent, last_error FROM notifications");
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId[a!.id]).toMatchObject({ status: "SENT", sent: true, last_error: null });
+    expect(byId[b!.id]).toMatchObject({ status: "FAILED", sent: false, last_error: "provider unavailable" });
+    expect((await repo.findById(a!.id))?.status).toBe("SENT");
+    expect(await repo.findById("00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
   it("ignores rows younger than the minimum age (a publish may still be in flight)", async () => {
     await repo.insertPending([row()]);
     expect(await repo.findUnpublished(60_000, 10)).toHaveLength(0);

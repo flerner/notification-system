@@ -17,6 +17,24 @@ services:
       timeout: 3s
       retries: 3
 
+  worker:
+    build: .
+    command: ["node", "dist/worker/main.js"]
+    # Scale with: docker compose up -d --scale worker=3
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://notif:notif@postgres:5432/notifications
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://notif:notif@rabbitmq:5672
+      # WORKER_QUEUES: sms          # serve only some queues to scale channels independently
+      # Override from the shell for demos, e.g. MOCK_LATENCY_MS=3000 docker compose up -d worker
+      MOCK_LATENCY_MS: ${MOCK_LATENCY_MS:-50}
+      MOCK_FAILURE_RATE: ${MOCK_FAILURE_RATE:-0}
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      api: { condition: service_healthy } # the api applies the migrations
+
   postgres:
     image: postgres:16-alpine
     environment:

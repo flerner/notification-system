@@ -26,6 +26,9 @@ export interface NotificationRepository {
   // Atomic: either every destination of the request is stored or none is.
   insertPending(rows: NewNotification[]): Promise<Notification[]>;
   markPublished(ids: string[]): Promise<void>;
+  findById(id: string): Promise<Notification | null>;
+  markSent(id: string): Promise<void>;
+  markFailed(id: string, error: string): Promise<void>;
   // Rows the broker never confirmed and that are old enough not to be a publish in flight.
   findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]>;
 }
@@ -62,6 +65,19 @@ export class PgNotificationRepository implements NotificationRepository {
   async markPublished(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     await this.db.query("UPDATE notifications SET published_at = now() WHERE id = ANY($1::uuid[])", [ids]);
+  }
+
+  async findById(id: string): Promise<Notification | null> {
+    const { rows } = await this.db.query(`SELECT ${COLUMNS} FROM notifications WHERE id = $1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async markSent(id: string): Promise<void> {
+    await this.db.query("UPDATE notifications SET status = 'SENT', sent_at = now(), last_error = NULL WHERE id = $1", [id]);
+  }
+
+  async markFailed(id: string, error: string): Promise<void> {
+    await this.db.query("UPDATE notifications SET status = 'FAILED', last_error = $2 WHERE id = $1", [id, error]);
   }
 
   async findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]> {

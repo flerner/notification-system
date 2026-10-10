@@ -134,6 +134,15 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 ### D-11: one long-lived confirm channel, reconnect lazily, timeouts everywhere
 - `RabbitPublisher` keeps one connection and channel, drops them on any error and reopens on next use. Publishes time out after 5 s so a stalled broker cannot hang API requests. The health check reuses it.
 
+### D-12: workers are a second process from the same image; backpressure through `prefetch`
+- `src/worker/` is a second entry point of the same codebase and image (compose `command` differs). Scale with `docker compose up -d --scale worker=N`; `WORKER_QUEUES` lets a process serve only some queues (e.g. only `sms`) so channels scale independently (book: scale workers, one queue per type).
+- `prefetch` caps unacknowledged messages per queue, so a slow provider cannot flood a worker. Ack happens only after the outcome is stored.
+- If the broker connection drops, the worker exits and Docker restarts it (`restart: unless-stopped`), instead of hand-written reconnect logic for consumers.
+- Providers sit behind `ChannelProvider`; the mocks have configurable latency and failure rate (`MOCK_LATENCY_MS`, `MOCK_FAILURE_RATE`).
+
+### D-13: M4 deliberately has no atomic claim (it comes with M5)
+- A claim (`PENDING -> SENDING`) without a lease timeout is WORSE than none: a worker that crashes after claiming leaves the row in SENDING, the redelivered message finds it claimed and is dropped, and the notification is lost. So claim and lease expiry ship together in M5. Until then a redelivered message is sent twice (at-least-once, documented in `processor.ts`). Provider failure = FAILED, final, until M6 adds retries.
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---

@@ -12,6 +12,13 @@ const schema = z.object({
   // publishes that are still in flight.
   RELAY_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   RELAY_MIN_AGE_MS: z.coerce.number().int().positive().default(10000),
+  // Worker only. WORKER_QUEUES lets one process serve a subset (e.g. only "sms") so channels can
+  // be scaled independently. Empty means all queues.
+  WORKER_QUEUES: z.string().default("").transform((v) => v.split(",").map((q) => q.trim()).filter(Boolean)),
+  WORKER_PREFETCH: z.coerce.number().int().positive().default(5),
+  // Mock providers: simulated delivery time and failure probability.
+  MOCK_LATENCY_MS: z.coerce.number().int().nonnegative().default(50),
+  MOCK_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0),
   MIGRATIONS_DIR: z.string().default("migrations"),
 });
 
