@@ -1,17 +1,23 @@
 import express, { type ErrorRequestHandler } from "express";
-import { pino } from "pino";
+import type { Logger } from "pino";
 import { pinoHttp } from "pino-http";
 import { ZodError } from "zod";
 import { runHealthChecks, type HealthCheck } from "../infra/health.js";
+import type { NotificationService } from "../notifications/service.js";
 import type { UserRepository } from "../users/repository.js";
+import { notificationRoutes } from "./notifications.js";
 import { userRoutes } from "./users.js";
 
 // Built from injected pieces so tests can create an app without real Postgres/Redis/RabbitMQ.
-export function buildServer(opts: { logLevel: string; healthChecks: HealthCheck[]; users: UserRepository }) {
-  const logger = pino({ level: opts.logLevel });
+export function buildServer(opts: {
+  logger: Logger;
+  healthChecks: HealthCheck[];
+  users: UserRepository;
+  notifications: NotificationService;
+}) {
   const app = express();
 
-  app.use(pinoHttp({ logger })); // one structured log line per request
+  app.use(pinoHttp({ logger: opts.logger })); // one structured log line per request
   app.use(express.json({ limit: "100kb" }));
 
   // Liveness: the process is up. Used by nothing that should restart us on a dependency outage.
@@ -26,6 +32,7 @@ export function buildServer(opts: { logLevel: string; healthChecks: HealthCheck[
   });
 
   app.use(userRoutes(opts.users));
+  app.use(notificationRoutes(opts.notifications));
 
   // Express 5 forwards errors thrown or rejected inside handlers to this middleware.
   // Express recognises an error handler by its four parameters, so `_next` must stay.

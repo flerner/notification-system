@@ -20,7 +20,14 @@ export class DuplicateContactError extends Error {}
 // Thrown when registering a device for a user that does not exist.
 export class UserNotFoundError extends Error {}
 
+export interface Contacts {
+  user: User;
+  devices: Device[];
+}
+
 export interface UserRepository {
+  // Everything we can reach this user with, or null if the user does not exist.
+  findContacts(userId: string): Promise<Contacts | null>;
   createUser(input: { email?: string; phone?: string }): Promise<User>;
   // Idempotent: registering the same token again updates the existing row.
   registerDevice(input: { userId: string; platform: Platform; token: string }): Promise<Device>;
@@ -32,6 +39,16 @@ const FOREIGN_KEY_VIOLATION = "23503";
 
 export class PgUserRepository implements UserRepository {
   constructor(private readonly db: pg.Pool) {}
+
+  async findContacts(userId: string): Promise<Contacts | null> {
+    const { rows: users } = await this.db.query("SELECT id, email, phone FROM users WHERE id = $1", [userId]);
+    if (users.length === 0) return null;
+    const { rows: devices } = await this.db.query(
+      `SELECT id, user_id AS "userId", platform, token FROM devices WHERE user_id = $1 ORDER BY id`,
+      [userId],
+    );
+    return { user: users[0], devices };
+  }
 
   async createUser(input: { email?: string; phone?: string }): Promise<User> {
     try {

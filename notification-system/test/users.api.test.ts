@@ -1,11 +1,10 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildServer } from "../src/api/server.js";
-import { InMemoryUserRepository } from "./fakes.js";
+import { buildTestApp } from "./fakes.js";
 
-let app: ReturnType<typeof buildServer>;
+let app: ReturnType<typeof buildTestApp>["app"];
 beforeEach(() => {
-  app = buildServer({ logLevel: "silent", healthChecks: [], users: new InMemoryUserRepository() });
+  app = buildTestApp().app;
 });
 
 const createUser = (payload: object) => request(app).post("/users").send(payload);

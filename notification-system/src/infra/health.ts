@@ -1,3 +1,5 @@
+import { withTimeout } from "./timeout.js";
+
 // A dependency check is just a name plus a function that throws when the dependency is unhealthy.
 export interface HealthCheck {
   name: string;
@@ -23,16 +25,4 @@ export async function runHealthChecks(checks: HealthCheck[], timeoutMs = 2000): 
     }),
   );
   return { ok: results.every(([, s]) => s === "up"), checks: Object.fromEntries(results) };
-}
-
-// A promise can't be cancelled from outside, so we race it against a timer that rejects.
-// Whichever settles first wins; if the timer wins, the slow check keeps running in the
-// background and its result is ignored. The timer is cleared afterwards so successful
-// checks don't leave a pending timeout behind.
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timeout")), ms);
-  });
-  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }

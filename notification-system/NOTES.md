@@ -122,6 +122,18 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 - E.164 phones, lowercased emails, at least one contact. Bigint ids are strings in JSON to avoid precision loss. 409 for duplicates, 404 for unknown users, 400 for validation.
 - `notification_settings` moved from M2 to M7 (nothing uses it before).
 
+### D-05 (resolved in M3): the notifications table is its own outbox
+- **Decision:** the API writes the rows first (`published_at = NULL`), publishes to RabbitMQ with publisher confirms, then sets `published_at`. A relay loop in the api republishes rows still NULL after `RELAY_MIN_AGE_MS`. No separate outbox table.
+- **Why not "republish old PENDING rows":** under load rows legitimately wait in a queue for a long time, so that would republish the whole backlog. `published_at` separates "the broker has it" from "it has been sent".
+- **Trade-off:** a message can be published twice (publish succeeded, marking failed, or two relays overlap). Accepted: consumers are idempotent (M5). Verified by hand: broker stopped, `POST` still answers 202 and stores the row, broker restarted, relay publishes it.
+
+### D-10: 202 Accepted, one row per destination, queue message carries only the id
+- 202 means "stored and queued", not delivered. A push to a user with 2 devices is 2 rows (own queue, own retries, own status). Destination is copied from the user's contacts at send time. The worker loads the row by id, so the database stays the single source of truth and M5 can claim rows atomically.
+- 422 when the user has no destination on that channel, 404 for an unknown user.
+
+### D-11: one long-lived confirm channel, reconnect lazily, timeouts everywhere
+- `RabbitPublisher` keeps one connection and channel, drops them on any error and reopens on next use. Publishes time out after 5 s so a stalled broker cannot hang API requests. The health check reuses it.
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---
@@ -271,6 +283,7 @@ Be honest and specific. Keep appending.
 
 - 2026-10-09: used Claude Code to read Ch. 10, extract concepts, and draft these notes and the milestone plan. I reviewed and chose the stack (TypeScript; RabbitMQ per Claude's recommendation).
 - - 2026-10-09: M1 (Docker skeleton) and M2 (users/devices) generated with Claude Code. I asked for the `withTimeout` explanation and had a comment added; I reviewed the design choices D-06 to D-09.
+- 2026-10-09: M3 (send API, queues, relay) generated with Claude Code; I chose the outbox variant after the explanation of the PENDING-reconciler pitfall.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

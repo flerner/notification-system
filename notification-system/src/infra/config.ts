@@ -8,6 +8,10 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   RABBITMQ_URL: z.string().url(),
+  // The relay republishes notifications the broker never confirmed. MIN_AGE keeps it away from
+  // publishes that are still in flight.
+  RELAY_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  RELAY_MIN_AGE_MS: z.coerce.number().int().positive().default(10000),
   MIGRATIONS_DIR: z.string().default("migrations"),
 });
 
