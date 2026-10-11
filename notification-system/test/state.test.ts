@@ -15,6 +15,10 @@ describe("notification state machine", () => {
     expect(predecessors("FAILED")).toEqual(["SENDING"]);
   });
 
+  it("lets a SENDING attempt end as skipped because the user opted out, and nothing else", () => {
+    expect(predecessors("SKIPPED_OPT_OUT")).toEqual(["SENDING"]);
+  });
+
   it("never goes back to PENDING", () => {
     expect(predecessors("PENDING")).toEqual([]);
   });
@@ -24,6 +28,6 @@ describe("notification state machine", () => {
   });
 
   it("treats SENT and FAILED as terminal and nothing else", () => {
-    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED"]);
+    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED", "SKIPPED_OPT_OUT"]);
   });
 });

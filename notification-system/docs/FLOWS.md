@@ -25,6 +25,10 @@ sequenceDiagram
         A-->>C: 202 same requestId, Idempotent-Replayed: true
     else new request
         A->>DB: load the user's email, phone and devices
+        opt the request uses a template
+            A->>A: read the template (Redis cache, else Postgres) and fill in the params
+            Note over A: unknown template or missing param: 422, nothing stored
+        end
         A->>DB: one transaction: store key K + one PENDING row per destination
         Note over A,DB: the key and the rows exist together or not at all
         A->>MQ: publish {notificationId} to the channel's queue, wait for confirm
@@ -73,11 +77,20 @@ sequenceDiagram
     W->>W: is this provider's circuit open? no
     W->>DB: claim: PENDING to SENDING, attempts + 1, lease (one atomic UPDATE)
     DB-->>W: the row (claimed)
-    W->>P: send, idempotency key = notification id, 10 s timeout
-    P-->>W: accepted
-    W->>DB: SENDING to SENT
-    W->>MQ: ack (only now)
+    W->>DB: has the user opted in to this channel? (read at this moment, never cached)
+    alt opted out
+        W->>DB: SENDING to SKIPPED_OPT_OUT (final, nothing is sent)
+        W->>MQ: ack
+    else opted in
+        W->>P: send, idempotency key = notification id, 10 s timeout
+        P-->>W: accepted
+        W->>DB: SENDING to SENT
+        W->>MQ: ack (only now)
+    end
 ```
+
+The opt-in check is repeated on every attempt, so a user who opts out while a retry is waiting is not
+sent to.
 
 ## 4. A retryable failure, then success
 
@@ -225,6 +238,8 @@ stateDiagram-v2
     SENDING --> SENT: provider accepted
     SENDING --> RETRYING: retryable failure, attempts left
     SENDING --> FAILED: permanent failure or attempts used up
+    SENDING --> SKIPPED_OPT_OUT: the user opted out of the channel
     SENT --> [*]
     FAILED --> [*]
+    SKIPPED_OPT_OUT --> [*]
 ```

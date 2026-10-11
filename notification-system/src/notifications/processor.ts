@@ -4,6 +4,7 @@ import { ProviderError } from "../providers/provider.js";
 import type { GuardedProvider } from "../providers/guarded.js";
 import { DEAD_LETTER_QUEUE, retryQueueName } from "./queues.js";
 import type { Notification, NotificationRepository } from "./repository.js";
+import type { SettingsRepository } from "./settings.js";
 import type { RetryPolicy } from "./retry.js";
 
 // "done":         nothing more to do with this message, acknowledge it.
@@ -23,6 +24,8 @@ export type ProcessResult = "done" | "busy" | "circuit_open";
 //  3. The provider gets the notification id as idempotency key, so providers that honour it
 //     drop the repeated send.
 //
+// Before sending, a user who has opted out of the channel is skipped (SKIPPED_OPT_OUT, final).
+//
 // When delivery fails (a ProviderError, see GuardedProvider):
 //  - permanent error            -> FAILED now, nothing to retry.
 //  - retryable, attempts left   -> RETRYING, and the message goes to a retry queue that hands it
@@ -35,6 +38,7 @@ export type ProcessResult = "done" | "busy" | "circuit_open";
 export class NotificationProcessor {
   constructor(
     private readonly notifications: NotificationRepository,
+    private readonly settings: SettingsRepository,
     private readonly providers: Record<string, GuardedProvider>,
     private readonly publisher: MessagePublisher,
     private readonly policy: RetryPolicy,
@@ -67,6 +71,16 @@ export class NotificationProcessor {
     }
 
     const n = claim.notification;
+
+    // Checked here, at the last moment before sending, and not when the request was accepted: the
+    // notification may have waited in a queue (or a retry queue) while the user opted out. Every
+    // attempt checks again.
+    if (!(await this.settings.isOptedIn(n.userId, n.channel))) {
+      await this.notifications.markSkipped(n.id, "SKIPPED_OPT_OUT", `user ${n.userId} opted out of ${n.channel}`);
+      this.log.info({ notificationId, userId: n.userId, channel: n.channel, reason: "opt_out" }, "notification skipped");
+      return "done";
+    }
+
     const started = Date.now();
     try {
       await provider.send({

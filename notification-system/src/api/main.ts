@@ -3,11 +3,14 @@ import { Redis } from "ioredis";
 import { pino } from "pino";
 import { loadConfig } from "../infra/config.js";
 import { migrate } from "../infra/migrate.js";
+import { RedisCache } from "../infra/cache.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
 import { allQueues } from "../notifications/queues.js";
 import { startRelay } from "../notifications/relay.js";
 import { NotificationService } from "../notifications/service.js";
+import { PgSettingsRepository } from "../notifications/settings.js";
+import { CachedTemplateRepository, PgTemplateRepository } from "../notifications/templates.js";
 import { PgUserRepository } from "../users/repository.js";
 import { buildServer } from "./server.js";
 
@@ -17,7 +20,9 @@ const logger = pino({ level: config.LOG_LEVEL });
 // Pool size is deliberate: Postgres defaults to max 100 connections total and we will run
 // several api/worker replicas, so each process takes a small, bounded slice.
 const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 2000 });
-const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, lazyConnect: false });
+// Fail fast when Redis is slow or unreachable: the cache is optional, so a command that cannot be
+// answered at once should fail (and fall back to the database) instead of waiting in a queue.
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 500 });
 const rabbit = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
 
 // Schema is applied before we accept traffic. Trade-off: a slow or failing migration delays
@@ -25,12 +30,19 @@ const rabbit = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_D
 await migrate(db, config.MIGRATIONS_DIR);
 
 const users = new PgUserRepository(db);
-const notifications = new NotificationService(users, new PgNotificationRepository(db), rabbit, logger);
+const templates = new CachedTemplateRepository(
+  new PgTemplateRepository(db),
+  new RedisCache(redis, logger),
+  config.TEMPLATE_CACHE_TTL_SECONDS,
+);
+const notifications = new NotificationService(users, new PgNotificationRepository(db), templates, rabbit, logger);
 
 const app = buildServer({
   logger,
   users,
   notifications,
+  templates,
+  settings: new PgSettingsRepository(db),
   healthChecks: [
     { name: "postgres", check: async () => void (await db.query("SELECT 1")) },
     { name: "redis", check: async () => void (await redis.ping()) },

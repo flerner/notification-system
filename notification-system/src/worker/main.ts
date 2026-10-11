@@ -6,6 +6,7 @@ import { allQueues, DEAD_LETTER_QUEUE, QUEUES } from "../notifications/queues.js
 import { RetryPolicy } from "../notifications/retry.js";
 import { NotificationProcessor } from "../notifications/processor.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
+import { PgSettingsRepository } from "../notifications/settings.js";
 import { buildProviders } from "../providers/index.js";
 import { startWorker } from "./consumer.js";
 
@@ -40,6 +41,7 @@ const publisher = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETR
 
 const processor = new NotificationProcessor(
   new PgNotificationRepository(db),
+  new PgSettingsRepository(db),
   providers,
   publisher,
   new RetryPolicy(config.RETRY_DELAYS_MS),

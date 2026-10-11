@@ -142,6 +142,19 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
       expect(await repo.markFailed(n!.id, "x")).toBe(false);
     });
 
+    it("records a skipped attempt as SKIPPED_OPT_OUT, final, with the reason", async () => {
+      const [n] = await repo.insertPending([row()]);
+      expect(await repo.markSkipped(n!.id, "SKIPPED_OPT_OUT", "user opted out")).toBe(false); // not claimed yet
+      await repo.claim(n!.id, 60_000);
+
+      expect(await repo.markSkipped(n!.id, "SKIPPED_OPT_OUT", "user 1 opted out of email")).toBe(true);
+
+      const { rows } = await pool.query("SELECT status, last_error, lease_expires_at FROM notifications WHERE id = $1", [n!.id]);
+      expect(rows[0]).toMatchObject({ status: "SKIPPED_OPT_OUT", last_error: "user 1 opted out of email", lease_expires_at: null });
+      expect((await repo.claim(n!.id, 60_000)).outcome).toBe("done"); // never claimed again
+      expect(await repo.markSent(n!.id)).toBe(false);
+    });
+
     it("the database rejects a status outside the state machine", async () => {
       const [n] = await repo.insertPending([row()]);
       await expect(pool.query("UPDATE notifications SET status = 'DELIVERED' WHERE id = $1", [n!.id])).rejects.toThrow();

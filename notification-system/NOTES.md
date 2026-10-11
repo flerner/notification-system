@@ -177,6 +177,20 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 - Seen in a real run: with a 60% failing mock, five failures in a row opened the circuit and the remaining notifications waited with `tries=0`; after the cooldown all of them resolved (6 SENT, 2 FAILED after 3 attempts).
 - **Trade-offs:** breaker state is per worker process (not shared); messages for an open circuit are re-checked every 5 s; a requeued message holds a prefetch slot while it waits, so a malformed message behind them is dead-lettered a little later.
 
+### D-21: Opt-out is checked in the worker, at the last moment, and recorded as SKIPPED_OPT_OUT
+- `notification_settings(user_id, channel, opt_in)`, no row = opted in. The worker checks after the claim and before the provider call, on every attempt. A notification can wait in a queue (or in a retry queue) while the user opts out, so checking only when the request is accepted would still send to someone who just opted out. A skipped notification is final (`SKIPPED_OPT_OUT`, reason in `last_error`), counted as an attempt, never retried, never dead-lettered (it is not a failure).
+- **Trade-off:** a notification for an opted-out user is still stored and queued first (a little wasted work), and the API answers 202 for it. Verified: queue a notification with the workers stopped, opt out, start the workers: it is skipped.
+
+### D-22: Templates are rendered in the API, per (name, channel), strictly
+- A caller sends `body` (+ `subject`) or `template` + `params`, never both. Rendering happens when the request is accepted, so the stored/queued payload is the final text: editing a template later cannot change a notification already waiting, and an unknown template or missing parameter is a 422 for the caller, not a failure inside a worker.
+- A missing parameter is an error (never send "Hi , your order..."). Values are inserted literally in a single pass (a value containing `{{x}}` is not expanded). Placeholders are `{{name}}`. No HTML escaping: templates are plain text.
+- The idempotency hash covers the request as sent (template name + sorted params), not the rendered text, so a retry still replays after the template was edited or deleted.
+
+### D-23: Redis cache-aside for templates only; fail open
+- `CachedTemplateRepository`: read cache, on a miss read Postgres and fill (TTL 300 s); an update writes Postgres then deletes the key. Not cached: "not found" (a template created a moment later must be visible at once). If Redis is slow or down, `RedisCache` turns every failure into a miss and logs a warning; the Redis client fails fast (`enableOfflineQueue: false`, 500 ms command timeout) so a dead Redis never stalls a request. Verified: Redis stopped, a send and a template update still succeed.
+- **Deliberately not cached, although the book lists user and device info:** (1) opt-in settings: consent must be authoritative, and a stale entry would send to someone who opted out, while a primary-key read is cheap at ~185/s; (2) user contacts and devices: a device token moves between users (the upsert), so invalidation is easy to get wrong and a stale entry could send one person's notification to someone else.
+- **Trade-off:** if Redis is up but the invalidation fails, an edited template can be served stale for up to the TTL.
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---
@@ -329,6 +343,7 @@ Be honest and specific. Keep appending.
 - 2026-10-09: M3 (send API, queues, relay) generated with Claude Code; I chose the outbox variant after the explanation of the PENDING-reconciler pitfall.
 - 2026-10-10: M5 (idempotency, claims, state machine) generated with Claude Code. I reviewed the design: three layers, why a claim without a lease loses notifications, why `busy` messages must not be acked.
 - 2026-10-11: M6 (retries, DLQ, timeouts, circuit breaker) generated with Claude Code. I reviewed the trade-offs: RabbitMQ retry queues vs DB-driven retries, why the breaker is checked before the claim, why FAILED rows are the truth and the DLQ is a signal.
+- 2026-10-11: M7 (opt-out, templates, cache) generated with Claude Code. I reviewed why consent and contacts are not cached, why the opt-out check is in the worker, and why the idempotency hash covers the request as sent.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

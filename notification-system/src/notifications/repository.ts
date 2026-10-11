@@ -35,6 +35,9 @@ export interface IdempotencyRecord {
 // concurrent request). The caller then looks the original up and replays it.
 export class DuplicateKeyError extends Error {}
 
+// Final statuses for notifications deliberately not sent.
+export type SkippedStatus = "SKIPPED_OPT_OUT";
+
 export type ClaimResult =
   | { outcome: "claimed"; notification: Notification }
   // Someone else is working on it and their lease has not expired: try again later.
@@ -58,6 +61,9 @@ export interface NotificationRepository {
   // Return false when the notification was not in a state that allows the change.
   markSent(id: string): Promise<boolean>;
   markFailed(id: string, error: string): Promise<boolean>;
+  // The attempt ended without sending because of a rule, not an error (e.g. the user opted out).
+  // Final. `detail` says why and is kept in last_error.
+  markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean>;
   // The delivery failed with a retryable error: park it until its retry message comes back.
   markRetrying(id: string, error: string): Promise<boolean>;
 }
@@ -157,6 +163,14 @@ export class PgNotificationRepository implements NotificationRepository {
       `UPDATE notifications SET status = 'SENT', sent_at = now(), last_error = NULL
        WHERE id = $1 AND status = ANY($2)`,
       [id, predecessors("SENT")],
+    );
+    return rowCount === 1;
+  }
+
+  async markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "UPDATE notifications SET status = $2, last_error = $3, lease_expires_at = NULL WHERE id = $1 AND status = ANY($4)",
+      [id, status, detail, predecessors(status)],
     );
     return rowCount === 1;
   }

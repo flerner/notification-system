@@ -5,17 +5,19 @@
 //   PENDING --claim--> SENDING --> SENT
 //                         |------> FAILED            (permanent error, or attempts exhausted)
 //                         |------> RETRYING --claim--> SENDING   (retryable error, waits in a retry queue)
+//                         |------> SKIPPED_OPT_OUT   (the user opted out of this channel)
 //                         '--(lease expired, claimed again)--> SENDING
-export const STATUSES = ["PENDING", "SENDING", "RETRYING", "SENT", "FAILED"] as const;
+export const STATUSES = ["PENDING", "SENDING", "RETRYING", "SENT", "FAILED", "SKIPPED_OPT_OUT"] as const;
 export type Status = (typeof STATUSES)[number];
 
 const TRANSITIONS: Record<Status, readonly Status[]> = {
   PENDING: ["SENDING"],
   // SENDING -> SENDING is the re-claim of a row whose worker crashed (lease expired).
-  SENDING: ["SENDING", "RETRYING", "SENT", "FAILED"],
+  SENDING: ["SENDING", "RETRYING", "SENT", "FAILED", "SKIPPED_OPT_OUT"],
   RETRYING: ["SENDING"],
   SENT: [],
   FAILED: [],
+  SKIPPED_OPT_OUT: [],
 };
 
 export function canTransition(from: Status, to: Status): boolean {

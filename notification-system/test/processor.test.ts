@@ -6,7 +6,7 @@ import { CircuitBreaker } from "../src/providers/circuit-breaker.js";
 import { GuardedProvider } from "../src/providers/guarded.js";
 import { MockProvider } from "../src/providers/mock.js";
 import { ProviderError, type ChannelProvider, type DeliveryRequest } from "../src/providers/provider.js";
-import { FakePublisher, InMemoryNotificationRepository, silentLogger } from "./fakes.js";
+import { FakePublisher, InMemoryNotificationRepository, InMemorySettingsRepository, silentLogger } from "./fakes.js";
 
 const LEASE = 1000;
 const DELAYS = [1000, 5000]; // -> at most 3 attempts
@@ -25,6 +25,7 @@ const transient = () => Promise.reject(new ProviderError("503 service unavailabl
 const permanent = () => Promise.reject(new ProviderError("invalid device token", false));
 
 let repo: InMemoryNotificationRepository;
+let settings: InMemorySettingsRepository;
 let publisher: FakePublisher;
 let email: ScriptedProvider;
 let breaker: CircuitBreaker;
@@ -34,6 +35,7 @@ let clock: number;
 function build(provider: ChannelProvider = email) {
   return new NotificationProcessor(
     repo,
+    settings,
     { email: new GuardedProvider(provider, breaker, 1000), sms: new GuardedProvider(new ScriptedProvider("sms"), new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 }), 1000) },
     publisher,
     new RetryPolicy(DELAYS),
@@ -46,6 +48,7 @@ beforeEach(() => {
   clock = 1_000_000;
   repo = new InMemoryNotificationRepository();
   repo.now = () => clock;
+  settings = new InMemorySettingsRepository();
   publisher = new FakePublisher();
   email = new ScriptedProvider("email-provider");
   // High threshold: only the circuit breaker tests below want the circuit to open.
@@ -299,5 +302,60 @@ describe("circuit breaker", () => {
     email.behaviour = permanent;
     for (let i = 0; i < 5; i++) await run((await store()).id);
     expect(breaker.isOpen()).toBe(false);
+  });
+});
+
+describe("opt-out", () => {
+  it("skips a notification whose user opted out of the channel, and never calls the provider", async () => {
+    const n = await store();
+    settings.optedOut.add(`${n.userId}:email`);
+
+    expect(await run(n.id)).toBe("done");
+
+    expect(email.calls).toHaveLength(0);
+    expect(row()).toMatchObject({ status: "SKIPPED_OPT_OUT", attempts: 1 });
+    expect(row().lastError).toContain("opted out of email");
+    expect(publisher.published).toEqual([]); // not a failure: no retry, no dead letter
+  });
+
+  it("only the opted-out channel is affected", async () => {
+    const n = await store();
+    settings.optedOut.add(`${n.userId}:sms`);
+    await run(n.id);
+    expect(row().status).toBe("SENT");
+  });
+
+  it("a skipped notification stays skipped when a duplicate of its message arrives", async () => {
+    const n = await store();
+    settings.optedOut.add(`${n.userId}:email`);
+    await run(n.id);
+    settings.optedOut.clear(); // the user opts back in afterwards
+
+    expect(await run(n.id)).toBe("done");
+    expect(email.calls).toHaveLength(0);
+    expect(row().status).toBe("SKIPPED_OPT_OUT");
+  });
+
+  it("is checked on every attempt: a user who opts out while a retry waits is not sent to", async () => {
+    const n = await store();
+    email.behaviour = transient;
+    await run(n.id); // attempt 1 fails, waits as RETRYING
+    expect(row().status).toBe("RETRYING");
+
+    settings.optedOut.add(`${n.userId}:email`); // the user opts out while the retry message waits
+    email.behaviour = async () => {};
+    await run(n.id);
+
+    expect(row()).toMatchObject({ status: "SKIPPED_OPT_OUT", attempts: 2 });
+    expect(email.calls).toHaveLength(1); // only the first, failed attempt ever reached the provider
+  });
+
+  it("lets a settings lookup failure propagate so the message stays on the queue", async () => {
+    const n = await store();
+    settings.isOptedIn = async () => {
+      throw new Error("database down");
+    };
+    await expect(run(n.id)).rejects.toThrow("database down");
+    expect(email.calls).toHaveLength(0);
   });
 });

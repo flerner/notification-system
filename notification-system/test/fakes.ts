@@ -1,4 +1,5 @@
 import { pino } from "pino";
+import type { Cache } from "../src/infra/cache.js";
 import { buildServer } from "../src/api/server.js";
 import type { MessagePublisher } from "../src/infra/rabbit.js";
 import {
@@ -8,9 +9,13 @@ import {
   type NewNotification,
   type Notification,
   type NotificationRepository,
+  type SkippedStatus,
 } from "../src/notifications/repository.js";
 import { isTerminal, predecessors } from "../src/notifications/state.js";
 import { NotificationService } from "../src/notifications/service.js";
+import type { Channel } from "../src/notifications/queues.js";
+import type { SettingsRepository } from "../src/notifications/settings.js";
+import type { Template, TemplateRepository } from "../src/notifications/templates.js";
 import {
   DuplicateContactError,
   UserNotFoundError,
@@ -111,6 +116,13 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     return true;
   }
 
+  async markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean> {
+    const row = this.rows.find((r) => r.id === id)!;
+    if (!predecessors(status).includes(row.status)) return false;
+    Object.assign(row, { status, lastError: detail, leaseExpiresAt: undefined });
+    return true;
+  }
+
   async markRetrying(id: string, error: string): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
     if (!predecessors("RETRYING").includes(row.status)) return false;
@@ -123,6 +135,56 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     if (!predecessors("FAILED").includes(row.status)) return false;
     Object.assign(row, { status: "FAILED", lastError: error });
     return true;
+  }
+}
+
+export class InMemoryTemplateRepository implements TemplateRepository {
+  items = new Map<string, Template>();
+  finds = 0; // how many times the "database" was read, to show what the cache saves
+
+  async find(name: string, channel: Channel): Promise<Template | null> {
+    this.finds++;
+    return this.items.get(`${name}:${channel}`) ?? null;
+  }
+
+  async upsert(t: Template): Promise<Template> {
+    this.items.set(`${t.name}:${t.channel}`, t);
+    return t;
+  }
+}
+
+// Opted in unless told otherwise, like the real table. `optedOut` holds "userId:channel".
+export class InMemorySettingsRepository implements SettingsRepository {
+  optedOut = new Set<string>();
+  constructor(private readonly users?: InMemoryUserRepository) {}
+
+  async isOptedIn(userId: string, channel: Channel): Promise<boolean> {
+    return !this.optedOut.has(`${userId}:${channel}`);
+  }
+
+  async setOptIn(userId: string, channel: Channel, optIn: boolean): Promise<void> {
+    if (this.users && !(await this.users.findContacts(userId))) throw new UserNotFoundError(`user ${userId} not found`);
+    if (optIn) this.optedOut.delete(`${userId}:${channel}`);
+    else this.optedOut.add(`${userId}:${channel}`);
+  }
+
+  async list(userId: string): Promise<Record<Channel, boolean> | null> {
+    if (this.users && !(await this.users.findContacts(userId))) return null;
+    const has = (c: Channel) => !this.optedOut.has(`${userId}:${c}`);
+    return { push: has("push"), sms: has("sms"), email: has("email") };
+  }
+}
+
+export class InMemoryCache implements Cache {
+  entries = new Map<string, { value: string; ttlSeconds: number }>();
+  async get(key: string) {
+    return this.entries.get(key)?.value ?? null;
+  }
+  async set(key: string, value: string, ttlSeconds: number) {
+    this.entries.set(key, { value, ttlSeconds });
+  }
+  async del(key: string) {
+    this.entries.delete(key);
   }
 }
 
@@ -143,8 +205,10 @@ export class FakePublisher implements MessagePublisher {
 export function buildTestApp(healthChecks: HealthCheck[] = []) {
   const users = new InMemoryUserRepository();
   const notificationRows = new InMemoryNotificationRepository();
+  const templates = new InMemoryTemplateRepository();
+  const settings = new InMemorySettingsRepository(users);
   const publisher = new FakePublisher();
-  const notifications = new NotificationService(users, notificationRows, publisher, silentLogger);
-  const app = buildServer({ logger: silentLogger, healthChecks, users, notifications });
-  return { app, users, notificationRows, publisher, notifications };
+  const notifications = new NotificationService(users, notificationRows, templates, publisher, silentLogger);
+  const app = buildServer({ logger: silentLogger, healthChecks, users, notifications, settings, templates });
+  return { app, users, notificationRows, templates, settings, publisher, notifications };
 }

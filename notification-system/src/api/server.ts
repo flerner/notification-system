@@ -4,8 +4,12 @@ import { pinoHttp } from "pino-http";
 import { ZodError } from "zod";
 import { runHealthChecks, type HealthCheck } from "../infra/health.js";
 import type { NotificationService } from "../notifications/service.js";
+import type { SettingsRepository } from "../notifications/settings.js";
+import type { TemplateRepository } from "../notifications/templates.js";
 import type { UserRepository } from "../users/repository.js";
 import { notificationRoutes } from "./notifications.js";
+import { settingsRoutes } from "./settings.js";
+import { templateRoutes } from "./templates.js";
 import { userRoutes } from "./users.js";
 
 // Built from injected pieces so tests can create an app without real Postgres/Redis/RabbitMQ.
@@ -14,6 +18,8 @@ export function buildServer(opts: {
   healthChecks: HealthCheck[];
   users: UserRepository;
   notifications: NotificationService;
+  settings: SettingsRepository;
+  templates: TemplateRepository;
 }) {
   const app = express();
 
@@ -33,6 +39,8 @@ export function buildServer(opts: {
 
   app.use(userRoutes(opts.users));
   app.use(notificationRoutes(opts.notifications));
+  app.use(settingsRoutes(opts.settings));
+  app.use(templateRoutes(opts.templates));
 
   // Express 5 forwards errors thrown or rejected inside handlers to this middleware.
   // Express recognises an error handler by its four parameters, so `_next` must stay.

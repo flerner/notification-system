@@ -12,6 +12,9 @@ const schema = z.object({
   // publishes that are still in flight.
   RELAY_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   RELAY_MIN_AGE_MS: z.coerce.number().int().positive().default(10000),
+  // How long a template stays cached. An update invalidates it immediately; this is the worst case
+  // if that invalidation could not reach Redis.
+  TEMPLATE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   // Worker only. WORKER_QUEUES lets one process serve a subset (e.g. only "sms") so channels can
   // be scaled independently. Empty means all queues.
   WORKER_QUEUES: z.string().default("").transform((v) => v.split(",").map((q) => q.trim()).filter(Boolean)),

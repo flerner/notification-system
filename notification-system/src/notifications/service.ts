@@ -11,6 +11,7 @@ import {
   type Payload,
 } from "./repository.js";
 import { queueFor, type Channel } from "./queues.js";
+import { render, TemplateNotFoundError, type Params, type TemplateRepository } from "./templates.js";
 
 // The user exists but has nothing to deliver to on this channel (no phone, no devices, ...).
 export class NoDestinationError extends Error {}
@@ -18,10 +19,15 @@ export class UnknownUserError extends Error {}
 // The same Idempotency-Key was sent with a different request: a bug on the caller's side.
 export class IdempotencyKeyReuseError extends Error {}
 
+// What the caller wants to say: ready-made text, or a template to fill in.
+export type Content =
+  | { kind: "text"; subject?: string; body: string }
+  | { kind: "template"; name: string; params: Params };
+
 export interface SendRequest {
   userId: string;
   channel: Channel;
-  payload: Payload;
+  content: Content;
 }
 
 export interface SendResult {
@@ -35,6 +41,7 @@ export class NotificationService {
   constructor(
     private readonly users: UserRepository,
     private readonly notifications: NotificationRepository,
+    private readonly templates: TemplateRepository,
     private readonly publisher: MessagePublisher,
     private readonly log: Logger,
   ) {}
@@ -44,7 +51,8 @@ export class NotificationService {
   //
   // With an idempotencyKey, calling this again with the same key and the same request does not
   // create anything new: it returns the original result (replayed = true). The key is checked
-  // first, so a replay still works if the user's contacts changed in the meantime.
+  // first, so a replay still works if the user's contacts changed, or the template was edited or
+  // deleted, in the meantime.
   async send(req: SendRequest, idempotencyKey?: string): Promise<SendResult> {
     const hash = requestHash(req);
     if (idempotencyKey) {
@@ -55,8 +63,16 @@ export class NotificationService {
     const contacts = await this.users.findContacts(req.userId);
     if (!contacts) throw new UnknownUserError(`user ${req.userId} not found`);
 
+    const destinations = this.destinationsFor(req.channel, contacts);
+    if (destinations.length === 0) throw new NoDestinationError(`user ${req.userId} has no destination for ${req.channel}`);
+
+    // Rendered now, so what is stored and queued is the final text: a later edit of the template
+    // cannot change a notification that is already waiting, and a missing template or parameter
+    // is reported to the caller instead of failing later in a worker.
+    const payload = await this.resolve(req.channel, req.content);
+
     const requestId = randomUUID();
-    const rows = this.destinationsFor(req.channel, contacts).map(
+    const rows = destinations.map(
       (d): NewNotification => ({
         requestId,
         userId: req.userId,
@@ -64,10 +80,9 @@ export class NotificationService {
         platform: d.platform,
         destination: d.destination,
         queue: queueFor(req.channel, d.platform),
-        payload: req.payload,
+        payload,
       }),
     );
-    if (rows.length === 0) throw new NoDestinationError(`user ${req.userId} has no destination for ${req.channel}`);
 
     let notifications: Notification[];
     try {
@@ -83,6 +98,16 @@ export class NotificationService {
     }
     await this.publish(notifications);
     return { requestId, notifications, replayed: false };
+  }
+
+  private async resolve(channel: Channel, content: Content): Promise<Payload> {
+    if (content.kind === "text") return { subject: content.subject, body: content.body };
+    const template = await this.templates.find(content.name, channel);
+    if (!template) throw new TemplateNotFoundError(`template "${content.name}" has no ${channel} version`);
+    return {
+      subject: template.subject === undefined ? undefined : render(template.subject, content.params),
+      body: render(template.body, content.params),
+    };
   }
 
   private replay(existing: IdempotencyRecord, hash: string): SendResult {
@@ -156,9 +181,13 @@ export class NotificationService {
 }
 
 // Fingerprint of what the caller asked for, to tell "the same request retried" from "the same key
-// reused for something else".
+// reused for something else". It covers the request as sent (template name and parameters), not
+// the rendered text, so a retry still matches after the template has been edited.
 function requestHash(req: SendRequest): string {
-  return createHash("sha256")
-    .update(JSON.stringify([req.userId, req.channel, req.payload.subject ?? null, req.payload.body]))
-    .digest("hex");
+  const c = req.content;
+  const content =
+    c.kind === "text"
+      ? ["text", c.subject ?? null, c.body]
+      : ["template", c.name, Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b))];
+  return createHash("sha256").update(JSON.stringify([req.userId, req.channel, content])).digest("hex");
 }
