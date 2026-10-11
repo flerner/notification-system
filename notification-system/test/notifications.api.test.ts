@@ -45,3 +45,37 @@ describe("POST /v1/notifications", () => {
     expect((await send(payload)).status).toBe(400);
   });
 });
+
+describe("Idempotency-Key header", () => {
+  const sendWithKey = (key: string, payload: object) =>
+    request(t.app).post("/v1/notifications").set("Idempotency-Key", key).send(payload);
+
+  it("replays the original answer on a retry and says so", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    const body = { userId: user.id, channel: "email", body: "hello" };
+
+    const first = await sendWithKey("evt-1", body);
+    const retry = await sendWithKey("evt-1", body);
+
+    expect(first.status).toBe(202);
+    expect(first.headers["idempotent-replayed"]).toBeUndefined();
+    expect(retry.status).toBe(202);
+    expect(retry.headers["idempotent-replayed"]).toBe("true");
+    expect(retry.body.requestId).toBe(first.body.requestId);
+    expect(retry.body.notifications[0].id).toBe(first.body.notifications[0].id);
+    expect(t.notificationRows.rows).toHaveLength(1);
+  });
+
+  it("answers 422 when the key is reused with a different request", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    await sendWithKey("evt-1", { userId: user.id, channel: "email", body: "hello" });
+    const res = await sendWithKey("evt-1", { userId: user.id, channel: "email", body: "different" });
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects an over-long key with 400", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    const res = await sendWithKey("k".repeat(256), { userId: user.id, channel: "email", body: "x" });
+    expect(res.status).toBe(400);
+  });
+});

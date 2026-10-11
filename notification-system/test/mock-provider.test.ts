@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MockProvider } from "../src/providers/mock.js";
 
-const req = { notificationId: "n", destination: "d", payload: { body: "b" } };
+const req = { notificationId: "n", idempotencyKey: "k", destination: "d", payload: { body: "b" } };
 const noSleep = async () => {};
 
 describe("MockProvider", () => {
@@ -25,5 +25,23 @@ describe("MockProvider", () => {
     const p = new MockProvider("m", { latencyMs: 120, failureRate: 0 }, Math.random, async (ms) => void waited.push(ms));
     await p.send(req);
     expect(waited).toEqual([120]);
+  });
+
+  it("delivers a given idempotency key only once", async () => {
+    const p = new MockProvider("m", { latencyMs: 0, failureRate: 0 }, () => 0.9, noSleep);
+    await p.send(req);
+    await p.send(req); // same key again, e.g. a redelivered message
+    await p.send({ ...req, idempotencyKey: "other" });
+    expect(p.deliveries).toBe(2);
+    expect(p.suppressed).toBe(1);
+  });
+
+  it("does not remember a key whose send failed, so a retry can still deliver", async () => {
+    let roll = 0.1; // fail first, succeed later
+    const p = new MockProvider("m", { latencyMs: 0, failureRate: 0.5 }, () => roll, noSleep);
+    await expect(p.send(req)).rejects.toThrow();
+    roll = 0.9;
+    await p.send(req);
+    expect(p.deliveries).toBe(1);
   });
 });

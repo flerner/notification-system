@@ -18,11 +18,11 @@ if (unknown.length > 0) throw new Error(`Unknown WORKER_QUEUES: ${unknown.join("
 // happens between them), so a small pool serves prefetch x queues concurrent messages.
 const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 5000 });
 
-const processor = new NotificationProcessor(
-  new PgNotificationRepository(db),
-  buildProviders({ latencyMs: config.MOCK_LATENCY_MS, failureRate: config.MOCK_FAILURE_RATE }),
-  logger,
-);
+const providers = buildProviders({ latencyMs: config.MOCK_LATENCY_MS, failureRate: config.MOCK_FAILURE_RATE });
+const missing = queues.filter((q) => !providers[q]);
+if (missing.length > 0) throw new Error(`No provider configured for: ${missing.join(", ")}`);
+
+const processor = new NotificationProcessor(new PgNotificationRepository(db), providers, logger, config.CLAIM_LEASE_MS);
 
 const worker = await startWorker(
   { url: config.RABBITMQ_URL, queues, prefetch: config.WORKER_PREFETCH, requeueDelayMs: 1000 },

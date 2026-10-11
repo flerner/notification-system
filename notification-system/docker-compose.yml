@@ -30,6 +30,7 @@ services:
       # Override from the shell for demos, e.g. MOCK_LATENCY_MS=3000 docker compose up -d worker
       MOCK_LATENCY_MS: ${MOCK_LATENCY_MS:-50}
       MOCK_FAILURE_RATE: ${MOCK_FAILURE_RATE:-0}
+      CLAIM_LEASE_MS: ${CLAIM_LEASE_MS:-60000}
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }

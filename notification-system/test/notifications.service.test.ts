@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { NoDestinationError, UnknownUserError } from "../src/notifications/service.js";
+import { IdempotencyKeyReuseError, NoDestinationError, UnknownUserError } from "../src/notifications/service.js";
 import { buildTestApp } from "./fakes.js";
 
 let t: ReturnType<typeof buildTestApp>;
@@ -90,5 +90,66 @@ describe("NotificationService.relayUnpublished", () => {
     await t.notifications.send({ userId: user.id, channel: "email", payload });
     expect(await t.notifications.relayUnpublished(0)).toBe(0);
     expect(t.notificationRows.rows[0]!.publishedAt).toBeNull();
+  });
+});
+
+describe("NotificationService.send: idempotency (layer 1)", () => {
+  const send = (userId: string, key?: string, body = "hello") =>
+    t.notifications.send({ userId, channel: "email", payload: { body } }, key);
+
+  it("a retry with the same key returns the original notifications and creates nothing new", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const first = await send(user.id, "evt-1");
+    const retry = await send(user.id, "evt-1");
+
+    expect(first.replayed).toBe(false);
+    expect(retry.replayed).toBe(true);
+    expect(retry.requestId).toBe(first.requestId);
+    expect(retry.notifications.map((n) => n.id)).toEqual(first.notifications.map((n) => n.id));
+    expect(t.notificationRows.rows).toHaveLength(1);
+    expect(t.publisher.published).toHaveLength(1); // not queued a second time
+  });
+
+  it("different keys are different requests", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    await send(user.id, "evt-1");
+    await send(user.id, "evt-2");
+    expect(t.notificationRows.rows).toHaveLength(2);
+  });
+
+  it("without a key every call is a new request (no deduplication)", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    await send(user.id);
+    await send(user.id);
+    expect(t.notificationRows.rows).toHaveLength(2);
+  });
+
+  it("rejects the same key reused for a different request", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    await send(user.id, "evt-1", "hello");
+    await expect(send(user.id, "evt-1", "something else")).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    expect(t.notificationRows.rows).toHaveLength(1);
+  });
+
+  it("replays even if the user can no longer be reached, because the key is checked first", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const first = await send(user.id, "evt-1");
+    t.users.findContacts = async () => null; // e.g. the user was deleted since
+    expect((await send(user.id, "evt-1")).requestId).toBe(first.requestId);
+  });
+
+  it("returns the winner's result when it loses a race between the key check and the insert", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const winner = await send(user.id, "evt-1");
+    // Simulate: our findByKey ran before the winner committed, so it saw nothing.
+    const realFind = t.notificationRows.findByKey.bind(t.notificationRows);
+    let calls = 0;
+    t.notificationRows.findByKey = async (k) => (calls++ === 0 ? null : realFind(k));
+
+    const loser = await send(user.id, "evt-1");
+
+    expect(loser.replayed).toBe(true);
+    expect(loser.requestId).toBe(winner.requestId);
+    expect(t.notificationRows.rows).toHaveLength(1);
   });
 });

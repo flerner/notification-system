@@ -4,7 +4,8 @@ import { z } from "zod";
 
 // What the consumer needs from the business logic.
 export interface MessageProcessor {
-  process(notificationId: string): Promise<void>;
+  // "busy" means another worker holds the notification: the message is put back and retried.
+  process(notificationId: string): Promise<"done" | "busy">;
 }
 
 export interface WorkerOptions {
@@ -64,13 +65,24 @@ export async function startWorker(opts: WorkerOptions, processor: MessageProcess
       return;
     }
     try {
-      await processor.process(notificationId);
+      const result = await processor.process(notificationId);
+      if (result === "busy") {
+        // Do NOT ack: if the worker holding it crashed, this message is the only thing that will
+        // make us notice once its lease expires. Until then we keep putting it back.
+        log.debug({ notificationId }, "notification busy, will check again");
+        await requeueAfterDelay(msg);
+        return;
+      }
       channel.ack(msg);
     } catch (err) {
       log.error({ err, notificationId }, "processing failed, will retry");
-      await new Promise((r) => setTimeout(r, opts.requeueDelayMs));
-      if (!stopping) channel.nack(msg, false, true);
+      await requeueAfterDelay(msg);
     }
+  }
+
+  async function requeueAfterDelay(msg: amqp.ConsumeMessage): Promise<void> {
+    await new Promise((r) => setTimeout(r, opts.requeueDelayMs));
+    if (!stopping) channel.nack(msg, false, true);
   }
 
   return {

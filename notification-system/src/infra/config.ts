@@ -16,6 +16,9 @@ const schema = z.object({
   // be scaled independently. Empty means all queues.
   WORKER_QUEUES: z.string().default("").transform((v) => v.split(",").map((q) => q.trim()).filter(Boolean)),
   WORKER_PREFETCH: z.coerce.number().int().positive().default(5),
+  // How long a worker owns a notification it is sending. Must exceed the slowest provider call.
+  // If a worker dies, its notification is picked up again after this long.
+  CLAIM_LEASE_MS: z.coerce.number().int().positive().default(60000),
   // Mock providers: simulated delivery time and failure probability.
   MOCK_LATENCY_MS: z.coerce.number().int().nonnegative().default(50),
   MOCK_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0),

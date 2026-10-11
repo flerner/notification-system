@@ -1,7 +1,15 @@
 import { pino } from "pino";
 import { buildServer } from "../src/api/server.js";
 import type { MessagePublisher } from "../src/infra/rabbit.js";
-import type { NewNotification, Notification, NotificationRepository } from "../src/notifications/repository.js";
+import {
+  DuplicateKeyError,
+  type ClaimResult,
+  type IdempotencyRecord,
+  type NewNotification,
+  type Notification,
+  type NotificationRepository,
+} from "../src/notifications/repository.js";
+import { isTerminal, predecessors } from "../src/notifications/state.js";
 import { NotificationService } from "../src/notifications/service.js";
 import {
   DuplicateContactError,
@@ -46,14 +54,24 @@ export class InMemoryUserRepository implements UserRepository {
   }
 }
 
+// Mirrors PgNotificationRepository's rules (idempotency keys, claims with leases, legal status
+// changes from state.ts). The Postgres tests check the real thing; this keeps the other tests fast.
 export class InMemoryNotificationRepository implements NotificationRepository {
-  rows: (Notification & { publishedAt: Date | null; sentAt?: Date; lastError?: string })[] = [];
+  rows: (Notification & { publishedAt: Date | null; sentAt?: Date; lastError?: string; leaseExpiresAt?: number })[] = [];
+  keys = new Map<string, { requestId: string; requestHash: string }>();
+  // Tests move time by replacing this, so lease expiry needs no sleeping.
+  now = () => Date.now();
 
-  async insertPending(rows: NewNotification[]): Promise<Notification[]> {
+  async insertPending(rows: NewNotification[], idempotency?: { key: string; hash: string }): Promise<Notification[]> {
+    if (idempotency) {
+      if (this.keys.has(idempotency.key)) throw new DuplicateKeyError(idempotency.key);
+      this.keys.set(idempotency.key, { requestId: rows[0]!.requestId, requestHash: idempotency.hash });
+    }
     const created = rows.map((r, i) => ({
       ...r,
       id: `n-${this.rows.length + i + 1}`,
-      status: "PENDING",
+      status: "PENDING" as const,
+      attempts: 0,
       createdAt: new Date(),
       publishedAt: null,
     }));
@@ -61,26 +79,43 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     return created;
   }
 
+  async findByKey(key: string): Promise<IdempotencyRecord | null> {
+    const k = this.keys.get(key);
+    if (!k) return null;
+    return { ...k, notifications: this.rows.filter((r) => r.requestId === k.requestId) };
+  }
+
   async markPublished(ids: string[]): Promise<void> {
     for (const r of this.rows) if (ids.includes(r.id)) r.publishedAt = new Date();
-  }
-
-  async findById(id: string): Promise<Notification | null> {
-    return this.rows.find((r) => r.id === id) ?? null;
-  }
-
-  async markSent(id: string): Promise<void> {
-    const r = this.rows.find((x) => x.id === id)!;
-    Object.assign(r, { status: "SENT", sentAt: new Date(), lastError: undefined });
-  }
-
-  async markFailed(id: string, error: string): Promise<void> {
-    Object.assign(this.rows.find((x) => x.id === id)!, { status: "FAILED", lastError: error });
   }
 
   // The fake ignores the age threshold: tests decide what is "old enough" by calling it.
   async findUnpublished(_olderThanMs: number, limit: number): Promise<Notification[]> {
     return this.rows.filter((r) => r.publishedAt === null).slice(0, limit);
+  }
+
+  async claim(id: string, leaseMs: number): Promise<ClaimResult> {
+    const row = this.rows.find((r) => r.id === id);
+    if (!row) return { outcome: "missing" };
+    const claimable =
+      predecessors("SENDING").includes(row.status) && (row.status !== "SENDING" || row.leaseExpiresAt! < this.now());
+    if (!claimable) return { outcome: isTerminal(row.status) ? "done" : "busy" };
+    Object.assign(row, { status: "SENDING", attempts: row.attempts + 1, leaseExpiresAt: this.now() + leaseMs });
+    return { outcome: "claimed", notification: { ...row } };
+  }
+
+  async markSent(id: string): Promise<boolean> {
+    const row = this.rows.find((r) => r.id === id)!;
+    if (!predecessors("SENT").includes(row.status)) return false;
+    Object.assign(row, { status: "SENT", sentAt: new Date(), lastError: undefined });
+    return true;
+  }
+
+  async markFailed(id: string, error: string): Promise<boolean> {
+    const row = this.rows.find((r) => r.id === id)!;
+    if (!predecessors("FAILED").includes(row.status)) return false;
+    Object.assign(row, { status: "FAILED", lastError: error });
+    return true;
   }
 }
 

@@ -1,23 +1,34 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { MessagePublisher } from "../infra/rabbit.js";
 import type { UserRepository } from "../users/repository.js";
-import type {
-  NewNotification,
-  Notification,
-  NotificationRepository,
-  Payload,
+import {
+  DuplicateKeyError,
+  type IdempotencyRecord,
+  type NewNotification,
+  type Notification,
+  type NotificationRepository,
+  type Payload,
 } from "./repository.js";
 import { queueFor, type Channel } from "./queues.js";
 
 // The user exists but has nothing to deliver to on this channel (no phone, no devices, ...).
 export class NoDestinationError extends Error {}
 export class UnknownUserError extends Error {}
+// The same Idempotency-Key was sent with a different request: a bug on the caller's side.
+export class IdempotencyKeyReuseError extends Error {}
 
 export interface SendRequest {
   userId: string;
   channel: Channel;
   payload: Payload;
+}
+
+export interface SendResult {
+  requestId: string;
+  notifications: Notification[];
+  // True when this call returned the result of an earlier call with the same Idempotency-Key.
+  replayed: boolean;
 }
 
 export class NotificationService {
@@ -30,9 +41,17 @@ export class NotificationService {
 
   // Persist first, publish second. Once the rows are stored the request is accepted: even if
   // RabbitMQ is down right now, relayUnpublished() will deliver them to the queue later.
-  async send(
-    req: SendRequest,
-  ): Promise<{ requestId: string; notifications: Notification[] }> {
+  //
+  // With an idempotencyKey, calling this again with the same key and the same request does not
+  // create anything new: it returns the original result (replayed = true). The key is checked
+  // first, so a replay still works if the user's contacts changed in the meantime.
+  async send(req: SendRequest, idempotencyKey?: string): Promise<SendResult> {
+    const hash = requestHash(req);
+    if (idempotencyKey) {
+      const existing = await this.notifications.findByKey(idempotencyKey);
+      if (existing) return this.replay(existing, hash);
+    }
+
     const contacts = await this.users.findContacts(req.userId);
     if (!contacts) throw new UnknownUserError(`user ${req.userId} not found`);
 
@@ -48,16 +67,30 @@ export class NotificationService {
         payload: req.payload,
       }),
     );
-    if (rows.length === 0)
-      throw new NoDestinationError(
-        `user ${req.userId} has no destination for ${req.channel}`,
-      );
+    if (rows.length === 0) throw new NoDestinationError(`user ${req.userId} has no destination for ${req.channel}`);
 
-    //store to postgres. Notifications are now safe they will be sent to the queue even if the broker is down right now. The relay will retry.
-    const notifications = await this.notifications.insertPending(rows);
-    //publish to rabbitMQ
+    let notifications: Notification[];
+    try {
+      notifications = await this.notifications.insertPending(rows, idempotencyKey ? { key: idempotencyKey, hash } : undefined);
+    } catch (err) {
+      // Lost a race: a concurrent request with the same key committed between our check above
+      // and our insert. The database picked the winner; we return its result.
+      if (err instanceof DuplicateKeyError && idempotencyKey) {
+        const existing = await this.notifications.findByKey(idempotencyKey);
+        if (existing) return this.replay(existing, hash);
+      }
+      throw err;
+    }
     await this.publish(notifications);
-    return { requestId, notifications };
+    return { requestId, notifications, replayed: false };
+  }
+
+  private replay(existing: IdempotencyRecord, hash: string): SendResult {
+    if (existing.requestHash !== hash) {
+      throw new IdempotencyKeyReuseError("Idempotency-Key was already used with a different request");
+    }
+    // Not published again: if the original publish failed, the relay takes care of it.
+    return { requestId: existing.requestId, notifications: existing.notifications, replayed: true };
   }
 
   // Safety net for notifications that were stored but never reached the broker (crash between
@@ -120,4 +153,12 @@ export class NotificationService {
         }));
     }
   }
+}
+
+// Fingerprint of what the caller asked for, to tell "the same request retried" from "the same key
+// reused for something else".
+function requestHash(req: SendRequest): string {
+  return createHash("sha256")
+    .update(JSON.stringify([req.userId, req.channel, req.payload.subject ?? null, req.payload.body]))
+    .digest("hex");
 }

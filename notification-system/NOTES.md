@@ -140,8 +140,24 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 - If the broker connection drops, the worker exits and Docker restarts it (`restart: unless-stopped`), instead of hand-written reconnect logic for consumers.
 - Providers sit behind `ChannelProvider`; the mocks have configurable latency and failure rate (`MOCK_LATENCY_MS`, `MOCK_FAILURE_RATE`).
 
-### D-13: M4 deliberately has no atomic claim (it comes with M5)
+### D-13: M4 deliberately had no atomic claim (added in M5, together with the lease, see D-15)
 - A claim (`PENDING -> SENDING`) without a lease timeout is WORSE than none: a worker that crashes after claiming leaves the row in SENDING, the redelivered message finds it claimed and is dropped, and the notification is lost. So claim and lease expiry ship together in M5. Until then a redelivered message is sent twice (at-least-once, documented in `processor.ts`). Provider failure = FAILED, final, until M6 adds retries.
+
+### D-14: Idempotency layer 1 (API): optional `Idempotency-Key`, key stored in the same transaction
+- `idempotency_keys(key PK, request_hash, request_id)`. The key row and the notification rows are inserted in ONE transaction, so a key never exists without its notifications. Same key + same request: the original result is returned (202, `Idempotent-Replayed: true`) and nothing new is created or queued. Same key + different request (hash differs): 422.
+- Race: two simultaneous requests with the same new key: the second `INSERT ... ON CONFLICT DO NOTHING` blocks until the first transaction finishes, then does nothing; the loser looks the winner up and replays it. Verified with 10 parallel curls (1 notification) and a Postgres test.
+- The key is checked BEFORE resolving the user's contacts, so a replay still works if the user changed in the meantime.
+- **Trade-off:** the header is optional, so a caller that sends none gets no protection (documented). Keys are kept forever here; production would expire them after ~24h. No per-client scoping until auth (M9).
+
+### D-15: Idempotency layer 2 (worker): atomic claim with a lease, plus `busy` requeue
+- `claim()` is one `UPDATE ... WHERE status = ANY(predecessors) AND (status <> 'SENDING' OR lease_expires_at < now())`. Of N concurrent workers exactly one wins (tested with 8 parallel claims). The lease (`CLAIM_LEASE_MS`, default 60 s, must exceed the slowest provider call) lets another worker take over a row whose worker died; killing a worker mid-send and restarting it was verified end to end (attempt 2, SENT, nothing lost).
+- A failed claim has three meanings: `done` (SENT/FAILED, ack and drop the message), `missing` (drop), `busy` (someone holds a live lease). `busy` is NOT acked: it is put back after a delay, because if the holder crashed this message is what makes us notice when the lease expires. Dropping it would lose the notification.
+- **Trade-off:** a `busy` message is re-checked every `requeueDelayMs` (1 s) until the lease resolves: wasteful but simple and correct. M6's delayed retry queues can replace the polling.
+- **Accepted duplicate:** re-claiming after lease expiry can send twice if the first attempt had actually gone out. We prefer a possible duplicate to a certain loss (book: never lose).
+
+### D-16: State machine in one module, constraint in the database; provider dedupe key (layer 3)
+- `state.ts` holds the transition table; the repository builds its SQL guards from `predecessors()`, so an illegal change matches no row (`markSent` on an unclaimed row returns false). The DB also has a `CHECK` on the status values.
+- Layer 3: `DeliveryRequest.idempotencyKey` = notification id, stable across attempts. The mock provider delivers a key once. Honest limits: the mock's memory is per process (a restarted worker has an empty memory), and providers without such a key will get a duplicate in the crash-after-send window. Both are covered by tests that document the behaviour.
 
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
@@ -293,6 +309,7 @@ Be honest and specific. Keep appending.
 - 2026-10-09: used Claude Code to read Ch. 10, extract concepts, and draft these notes and the milestone plan. I reviewed and chose the stack (TypeScript; RabbitMQ per Claude's recommendation).
 - - 2026-10-09: M1 (Docker skeleton) and M2 (users/devices) generated with Claude Code. I asked for the `withTimeout` explanation and had a comment added; I reviewed the design choices D-06 to D-09.
 - 2026-10-09: M3 (send API, queues, relay) generated with Claude Code; I chose the outbox variant after the explanation of the PENDING-reconciler pitfall.
+- 2026-10-10: M5 (idempotency, claims, state machine) generated with Claude Code. I reviewed the design: three layers, why a claim without a lease loses notifications, why `busy` messages must not be acked.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

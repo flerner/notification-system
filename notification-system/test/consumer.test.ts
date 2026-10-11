@@ -1,7 +1,7 @@
 import amqp from "amqplib";
 import { afterEach, describe, expect, it } from "vitest";
 import { RabbitPublisher } from "../src/infra/rabbit.js";
-import { startWorker, type RunningWorker } from "../src/worker/consumer.js";
+import { startWorker, type MessageProcessor, type RunningWorker } from "../src/worker/consumer.js";
 import { silentLogger } from "./fakes.js";
 
 // Integration test against a real RabbitMQ. Skipped unless TEST_RABBITMQ_URL is set, e.g.:
@@ -23,7 +23,7 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
   let worker: RunningWorker | undefined;
   const cleanup: (() => Promise<void>)[] = [];
 
-  async function setup(processor: { process(id: string): Promise<void> }) {
+  async function setup(processor: MessageProcessor) {
     queue = `test.worker.${Date.now()}.${Math.random().toString(36).slice(2)}`;
     publisher = new RabbitPublisher(url!, [queue], silentLogger);
     await publisher.check(); // declares the queue
@@ -44,7 +44,12 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
 
   it("passes the notification id to the processor and acks the message", async () => {
     const seen: string[] = [];
-    await setup({ process: async (id) => void seen.push(id) });
+    await setup({
+      process: async (id) => {
+        seen.push(id);
+        return "done";
+      },
+    });
     await publisher.publish(queue, { notificationId: ID });
     await until(() => seen.length === 1);
     expect(seen).toEqual([ID]);
@@ -55,6 +60,7 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
     await setup({
       process: async () => {
         if (++attempts < 3) throw new Error("database down");
+        return "done";
       },
     });
     await publisher.publish(queue, { notificationId: ID });
@@ -63,12 +69,26 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
 
   it("discards a malformed message without calling the processor or looping", async () => {
     let calls = 0;
-    await setup({ process: async () => void calls++ });
+    await setup({
+      process: async () => {
+        calls++;
+        return "done";
+      },
+    });
     await publisher.publish(queue, { nonsense: true });
     await publisher.publish(queue, { notificationId: ID }); // proves the worker kept going
     await until(() => calls === 1);
     await new Promise((r) => setTimeout(r, 150));
     expect(calls).toBe(1);
+  });
+
+  it("puts a message back while the notification is busy, and acks it once it is done", async () => {
+    let calls = 0;
+    await setup({ process: async () => (++calls < 3 ? "busy" : "done") });
+    await publisher.publish(queue, { notificationId: ID });
+    await until(() => calls === 3);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(calls).toBe(3); // acked on the third call: no further redelivery
   });
 
   it("stop() waits for the message in progress to finish", async () => {
@@ -77,6 +97,7 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
       process: async () => {
         await new Promise((r) => setTimeout(r, 200));
         finished = true;
+        return "done";
       },
     });
     await publisher.publish(queue, { notificationId: ID });
