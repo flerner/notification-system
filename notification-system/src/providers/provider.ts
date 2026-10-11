@@ -11,10 +11,22 @@ export interface DeliveryRequest {
   payload: Payload;
 }
 
+// What a provider throws when it cannot deliver. `retryable` tells the worker what to do next:
+//  - true:  the problem is probably temporary (timeout, 5xx, rate limit, network): try again later.
+//  - false: retrying can never help (invalid device token, malformed address): give up now.
+export class ProviderError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
 // One implementation per third-party service (APNS, FCM, Twilio, SendGrid, ...). Workers only
 // know this interface, so a provider can be swapped or unplugged without touching them (book:
 // FCM is unavailable in China, so another push service is used there). send() resolves when
-// the provider accepted the message and throws when it did not.
+// the provider accepted the message and throws a ProviderError when it did not.
 export interface ChannelProvider {
   readonly name: string;
   send(req: DeliveryRequest): Promise<void>;

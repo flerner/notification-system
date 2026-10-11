@@ -23,11 +23,16 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
   let worker: RunningWorker | undefined;
   const cleanup: (() => Promise<void>)[] = [];
 
-  async function setup(processor: MessageProcessor) {
+  async function setup(processor: MessageProcessor, deadLetter: (m: object) => Promise<void> = async () => {}) {
     queue = `test.worker.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-    publisher = new RabbitPublisher(url!, [queue], silentLogger);
+    publisher = new RabbitPublisher(url!, [{ name: queue }], silentLogger);
     await publisher.check(); // declares the queue
-    worker = await startWorker({ url: url!, queues: [queue], prefetch: 2, requeueDelayMs: 20 }, processor, silentLogger);
+    worker = await startWorker(
+      { url: url!, queues: [queue], prefetch: 2, requeueDelayMs: 20, circuitOpenDelayMs: 20 },
+      processor,
+      silentLogger,
+      deadLetter,
+    );
     cleanup.push(async () => {
       const conn = await amqp.connect(url!);
       const ch = await conn.createChannel();
@@ -67,19 +72,49 @@ describe.skipIf(!url)("worker consumer (real RabbitMQ)", () => {
     await until(() => attempts === 3);
   });
 
-  it("discards a malformed message without calling the processor or looping", async () => {
+  it("sends a malformed message to the dead-letter queue, without calling the processor or looping", async () => {
     let calls = 0;
-    await setup({
-      process: async () => {
-        calls++;
-        return "done";
+    const dead: object[] = [];
+    await setup(
+      {
+        process: async () => {
+          calls++;
+          return "done";
+        },
       },
-    });
+      async (m) => void dead.push(m),
+    );
     await publisher.publish(queue, { nonsense: true });
     await publisher.publish(queue, { notificationId: ID }); // proves the worker kept going
     await until(() => calls === 1);
     await new Promise((r) => setTimeout(r, 150));
     expect(calls).toBe(1);
+    expect(dead).toEqual([{ reason: "malformed", queue, payload: JSON.stringify({ nonsense: true }) }]);
+  });
+
+  it("keeps a malformed message on the queue until it could be dead-lettered", async () => {
+    let attempts = 0;
+    const dead: object[] = [];
+    await setup({ process: async () => "done" }, async (m) => {
+      if (++attempts < 3) throw new Error("dead-letter queue unreachable");
+      dead.push(m);
+    });
+    await publisher.publish(queue, { nonsense: true });
+    await until(() => dead.length === 1);
+    expect(attempts).toBe(3); // it was put back twice, never lost
+  });
+
+  it("tells the processor which queue the message came from, and puts it back while the circuit is open", async () => {
+    const seen: string[] = [];
+    await setup({
+      process: async (_id, q) => {
+        seen.push(q);
+        return seen.length < 3 ? "circuit_open" : "done";
+      },
+    });
+    await publisher.publish(queue, { notificationId: ID });
+    await until(() => seen.length === 3);
+    expect(seen).toEqual([queue, queue, queue]);
   });
 
   it("puts a message back while the notification is busy, and acks it once it is done", async () => {

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { canTransition, isTerminal, predecessors, STATUSES } from "../src/notifications/state.js";
 
 describe("notification state machine", () => {
-  it("only lets a PENDING notification be claimed, and a SENDING one be re-claimed", () => {
-    expect(predecessors("SENDING")).toEqual(["PENDING", "SENDING"]);
+  it("lets PENDING and RETRYING notifications be claimed, and a SENDING one be re-claimed", () => {
+    expect(predecessors("SENDING")).toEqual(["PENDING", "SENDING", "RETRYING"]);
+  });
+
+  it("only lets a SENDING notification wait for a retry", () => {
+    expect(predecessors("RETRYING")).toEqual(["SENDING"]);
   });
 
   it("only lets a SENDING notification finish", () => {

@@ -159,6 +159,24 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 - `state.ts` holds the transition table; the repository builds its SQL guards from `predecessors()`, so an illegal change matches no row (`markSent` on an unclaimed row returns false). The DB also has a `CHECK` on the status values.
 - Layer 3: `DeliveryRequest.idempotencyKey` = notification id, stable across attempts. The mock provider delivers a key once. Honest limits: the mock's memory is per process (a restarted worker has an empty memory), and providers without such a key will get a duplicate in the crash-after-send window. Both are covered by tests that document the behaviour.
 
+### D-17: Error classification: `ProviderError.retryable`, unknown means retryable
+- Providers throw `ProviderError(message, retryable)`. Permanent (invalid token): FAILED immediately, no retry can help. Retryable (timeout, 5xx, network): retried with backoff. Anything that is not a `ProviderError` is wrapped as retryable, so an unexpected bug cannot cause an infinite loop: the attempt limit bounds it.
+
+### D-18: Retries use RabbitMQ retry queues (TTL + dead-letter), not timers in our code
+- `email.retry.5000` etc.: a message waits there for its TTL, then the broker dead-letters it to the default exchange with the main queue as routing key. One queue per delay (all messages in a queue share one TTL, because RabbitMQ only expires at the head of a queue). Delays `RETRY_DELAYS_MS` (default 5 s, 30 s, 2 min) give N+1 attempts; the attempt number picks the queue.
+- Order in the worker: mark the row RETRYING, publish to the retry queue, then ack. If the publish fails the error propagates, the original message returns to the queue and a worker claims the row again from RETRYING (sooner than the backoff: acceptable).
+- **Trade-offs:** no random jitter (fixed TTLs); 5 main queues x N delays means many small queues (declared by code, idempotent); changing a delay creates new queue names, the old ones stay behind. A DB-driven retry (`next_attempt_at` plus the relay) would allow jitter but ties retries to the api process.
+
+### D-19: Dead-letter queue is an operator signal; the FAILED row is the truth
+- Permanent failures, exhausted attempts and malformed messages are published to `dead-letter` with the reason. For a FAILED notification the row is written first and the DLQ publish is best effort: failing to announce must not make a worker send again. Malformed messages are acknowledged only after they reached the DLQ (otherwise they stay on the queue).
+- M10: alert on DLQ depth > 0 and on the `notification_failed` log events.
+
+### D-20: Timeouts and a circuit breaker per provider, checked BEFORE the claim
+- `PROVIDER_TIMEOUT_MS` (10 s) turns a hung call into a retryable failure; the worker refuses to start unless `CLAIM_LEASE_MS` is greater, otherwise a healthy worker loses its claim and a second one sends a duplicate.
+- `CircuitBreaker` (closed / open / half-open): after `BREAKER_FAILURE_THRESHOLD` consecutive transient failures it opens for `BREAKER_COOLDOWN_MS`. While open the worker does not claim, so notifications do not burn attempts against a provider that is down; the message goes back to the queue with a 5 s pause. Permanent errors do not count (the provider answered). Half-open lets calls through; one success closes, one failure re-opens. One breaker per provider so one outage does not stop the others.
+- Seen in a real run: with a 60% failing mock, five failures in a row opened the circuit and the remaining notifications waited with `tries=0`; after the cooldown all of them resolved (6 SENT, 2 FAILED after 3 attempts).
+- **Trade-offs:** breaker state is per worker process (not shared); messages for an open circuit are re-checked every 5 s; a requeued message holds a prefetch slot while it waits, so a malformed message behind them is dead-lettered a little later.
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---
@@ -310,6 +328,7 @@ Be honest and specific. Keep appending.
 - - 2026-10-09: M1 (Docker skeleton) and M2 (users/devices) generated with Claude Code. I asked for the `withTimeout` explanation and had a comment added; I reviewed the design choices D-06 to D-09.
 - 2026-10-09: M3 (send API, queues, relay) generated with Claude Code; I chose the outbox variant after the explanation of the PENDING-reconciler pitfall.
 - 2026-10-10: M5 (idempotency, claims, state machine) generated with Claude Code. I reviewed the design: three layers, why a claim without a lease loses notifications, why `busy` messages must not be acked.
+- 2026-10-11: M6 (retries, DLQ, timeouts, circuit breaker) generated with Claude Code. I reviewed the trade-offs: RabbitMQ retry queues vs DB-driven retries, why the breaker is checked before the claim, why FAILED rows are the truth and the DLQ is a signal.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

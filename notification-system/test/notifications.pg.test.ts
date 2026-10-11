@@ -120,6 +120,28 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
       expect(await repo.markFailed(n!.id, "late")).toBe(false);
     });
 
+    it("parks a failed attempt as RETRYING, and a worker can claim it again", async () => {
+      const [n] = await repo.insertPending([row()]);
+      expect(await repo.markRetrying(n!.id, "503")).toBe(false); // not claimed yet: illegal
+      await repo.claim(n!.id, 60_000);
+
+      expect(await repo.markRetrying(n!.id, "503 service unavailable")).toBe(true);
+      const { rows } = await pool.query("SELECT status, last_error, lease_expires_at FROM notifications WHERE id = $1", [n!.id]);
+      expect(rows[0]).toMatchObject({ status: "RETRYING", last_error: "503 service unavailable", lease_expires_at: null });
+
+      const again = await repo.claim(n!.id, 60_000); // no lease to wait for: the retry message is the trigger
+      expect(again.outcome).toBe("claimed");
+      expect(again.outcome === "claimed" && again.notification.attempts).toBe(2);
+    });
+
+    it("a RETRYING notification is not finished: only a claim can move it on", async () => {
+      const [n] = await repo.insertPending([row()]);
+      await repo.claim(n!.id, 60_000);
+      await repo.markRetrying(n!.id, "503");
+      expect(await repo.markSent(n!.id)).toBe(false);
+      expect(await repo.markFailed(n!.id, "x")).toBe(false);
+    });
+
     it("the database rejects a status outside the state machine", async () => {
       const [n] = await repo.insertPending([row()]);
       await expect(pool.query("UPDATE notifications SET status = 'DELIVERED' WHERE id = $1", [n!.id])).rejects.toThrow();

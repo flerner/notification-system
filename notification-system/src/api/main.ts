@@ -5,7 +5,7 @@ import { loadConfig } from "../infra/config.js";
 import { migrate } from "../infra/migrate.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
-import { QUEUES } from "../notifications/queues.js";
+import { allQueues } from "../notifications/queues.js";
 import { startRelay } from "../notifications/relay.js";
 import { NotificationService } from "../notifications/service.js";
 import { PgUserRepository } from "../users/repository.js";
@@ -18,7 +18,7 @@ const logger = pino({ level: config.LOG_LEVEL });
 // several api/worker replicas, so each process takes a small, bounded slice.
 const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 2000 });
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, lazyConnect: false });
-const rabbit = new RabbitPublisher(config.RABBITMQ_URL, QUEUES, logger);
+const rabbit = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
 
 // Schema is applied before we accept traffic. Trade-off: a slow or failing migration delays
 // startup; the advisory lock in migrate() keeps concurrent replicas safe.

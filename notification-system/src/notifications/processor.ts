@@ -1,10 +1,15 @@
 import type { Logger } from "pino";
-import type { ChannelProvider } from "../providers/provider.js";
-import type { NotificationRepository } from "./repository.js";
+import type { MessagePublisher } from "../infra/rabbit.js";
+import { ProviderError } from "../providers/provider.js";
+import type { GuardedProvider } from "../providers/guarded.js";
+import { DEAD_LETTER_QUEUE, retryQueueName } from "./queues.js";
+import type { Notification, NotificationRepository } from "./repository.js";
+import type { RetryPolicy } from "./retry.js";
 
-// "done": nothing more to do with this message, acknowledge it.
-// "busy": another worker holds the notification; try the message again later.
-export type ProcessResult = "done" | "busy";
+// "done":         nothing more to do with this message, acknowledge it.
+// "busy":         another worker holds the notification; try the message again soon.
+// "circuit_open": the provider is considered down; try the message again after a longer pause.
+export type ProcessResult = "done" | "busy" | "circuit_open";
 
 // Handles one queue message. Messages are delivered AT LEAST once (a crash before the ack makes
 // the broker redeliver; the relay may publish twice), so this must be safe to run repeatedly
@@ -18,19 +23,36 @@ export type ProcessResult = "done" | "busy";
 //  3. The provider gets the notification id as idempotency key, so providers that honour it
 //     drop the repeated send.
 //
-// A provider failure is an expected outcome and is recorded; only infrastructure errors (e.g.
-// the database is down) are thrown, so the consumer can leave the message on the queue.
-// Until M6 a provider failure is final (FAILED); there is no retry yet.
+// When delivery fails (a ProviderError, see GuardedProvider):
+//  - permanent error            -> FAILED now, nothing to retry.
+//  - retryable, attempts left   -> RETRYING, and the message goes to a retry queue that hands it
+//                                  back to the main queue after the backoff delay.
+//  - retryable, no attempts left-> FAILED.
+// FAILED rows are also announced on the dead-letter queue (best effort: the row is the truth).
+//
+// Only infrastructure errors (the database or broker is down) are thrown, so the consumer can
+// leave the message on the queue.
 export class NotificationProcessor {
   constructor(
     private readonly notifications: NotificationRepository,
-    private readonly providers: Record<string, ChannelProvider>,
+    private readonly providers: Record<string, GuardedProvider>,
+    private readonly publisher: MessagePublisher,
+    private readonly policy: RetryPolicy,
     private readonly log: Logger,
-    // Must be longer than the slowest provider call, or a healthy worker loses its claim.
+    // Must be longer than the slowest provider call (the provider timeout), or a healthy worker
+    // loses its claim.
     private readonly leaseMs: number,
   ) {}
 
-  async process(notificationId: string): Promise<ProcessResult> {
+  // `queue` is the queue this message came from; it tells us which provider is needed before we
+  // have loaded the notification.
+  async process(notificationId: string, queue: string): Promise<ProcessResult> {
+    const provider = this.providers[queue];
+    if (!provider) throw new Error(`no provider configured for queue ${queue}`);
+
+    // Before claiming: a notification must not use up an attempt against a provider that is down.
+    if (provider.isOpen()) return "circuit_open";
+
     const claim = await this.notifications.claim(notificationId, this.leaseMs);
     switch (claim.outcome) {
       case "missing":
@@ -45,9 +67,6 @@ export class NotificationProcessor {
     }
 
     const n = claim.notification;
-    const provider = this.providers[n.queue];
-    if (!provider) throw new Error(`no provider configured for queue ${n.queue}`);
-
     const started = Date.now();
     try {
       await provider.send({
@@ -57,16 +76,48 @@ export class NotificationProcessor {
         payload: n.payload,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await this.notifications.markFailed(n.id, message);
-      this.log.warn({ notificationId, queue: n.queue, provider: provider.name, err: message }, "delivery failed");
-      return "done";
+      return this.handleFailure(n, provider.name, err as ProviderError);
     }
     const recorded = await this.notifications.markSent(n.id);
     this.log.info(
       { notificationId, queue: n.queue, provider: provider.name, attempt: n.attempts, ms: Date.now() - started, recorded },
       "notification sent",
     );
+    return "done";
+  }
+
+  private async handleFailure(n: Notification, providerName: string, err: ProviderError): Promise<ProcessResult> {
+    if (!err.retryable) return this.giveUp(n, err.message, "permanent");
+
+    const delay = this.policy.delayAfter(n.attempts);
+    if (delay === undefined) return this.giveUp(n, err.message, "exhausted");
+
+    // Row first, message second: the row says RETRYING even if the publish below fails. In that
+    // case the error propagates, the original message goes back on the queue, and a worker claims
+    // the notification again (sooner than the backoff, which is acceptable).
+    const parked = await this.notifications.markRetrying(n.id, err.message);
+    if (!parked) return "done"; // someone else finished or took it over meanwhile
+    await this.publisher.publish(retryQueueName(n.queue, delay), { notificationId: n.id });
+    this.log.warn(
+      { notificationId: n.id, queue: n.queue, provider: providerName, attempt: n.attempts, retryInMs: delay, err: err.message },
+      "delivery failed, will retry",
+    );
+    return "done";
+  }
+
+  private async giveUp(n: Notification, error: string, reason: "permanent" | "exhausted"): Promise<ProcessResult> {
+    await this.notifications.markFailed(n.id, error);
+    // An alert-level log: M10 turns these (and the dead-letter queue depth) into a Grafana alert.
+    this.log.error(
+      { event: "notification_failed", notificationId: n.id, queue: n.queue, attempts: n.attempts, reason, err: error },
+      "notification failed for good",
+    );
+    try {
+      await this.publisher.publish(DEAD_LETTER_QUEUE, { notificationId: n.id, queue: n.queue, reason, error, attempts: n.attempts });
+    } catch (err) {
+      // The row already says FAILED; failing to announce it must not make the worker redo the send.
+      this.log.error({ err, notificationId: n.id }, "could not publish to the dead-letter queue");
+    }
     return "done";
   }
 }

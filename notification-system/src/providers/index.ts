@@ -1,14 +1,26 @@
-import { MockProvider, type MockOptions } from "./mock.js";
+import { CircuitBreaker, type BreakerOptions } from "./circuit-breaker.js";
+import { GuardedProvider } from "./guarded.js";
+import { MockProvider } from "./mock.js";
 import type { ChannelProvider } from "./provider.js";
 
-// Which provider serves which queue. To use a real service, replace the entry with a class that
+export interface ProvidersOptions {
+  latencyMs: number;
+  failureRate: number;
+  timeoutMs: number;
+  breaker: BreakerOptions;
+}
+
+// Which provider serves which queue, each with its own circuit breaker (one provider being down
+// must not stop the others). To use a real service, replace the entry with a class that
 // implements ChannelProvider; nothing else changes.
-export function buildProviders(opts: MockOptions): Record<string, ChannelProvider> {
+export function buildProviders(opts: ProvidersOptions): Record<string, GuardedProvider> {
+  const mock = (name: string): ChannelProvider => new MockProvider(name, opts);
+  const guard = (provider: ChannelProvider) => new GuardedProvider(provider, new CircuitBreaker(opts.breaker), opts.timeoutMs);
   return {
-    "push.ios": new MockProvider("mock-apns", opts),
-    "push.android": new MockProvider("mock-fcm", opts),
-    "push.web": new MockProvider("mock-webpush", opts),
-    sms: new MockProvider("mock-sms", opts),
-    email: new MockProvider("mock-email", opts),
+    "push.ios": guard(mock("mock-apns")),
+    "push.android": guard(mock("mock-fcm")),
+    "push.web": guard(mock("mock-webpush")),
+    sms: guard(mock("mock-sms")),
+    email: guard(mock("mock-email")),
   };
 }

@@ -3,15 +3,17 @@
 // matches no row.
 //
 //   PENDING --claim--> SENDING --> SENT
-//                         |------> FAILED
+//                         |------> FAILED            (permanent error, or attempts exhausted)
+//                         |------> RETRYING --claim--> SENDING   (retryable error, waits in a retry queue)
 //                         '--(lease expired, claimed again)--> SENDING
-export const STATUSES = ["PENDING", "SENDING", "SENT", "FAILED"] as const;
+export const STATUSES = ["PENDING", "SENDING", "RETRYING", "SENT", "FAILED"] as const;
 export type Status = (typeof STATUSES)[number];
 
 const TRANSITIONS: Record<Status, readonly Status[]> = {
   PENDING: ["SENDING"],
   // SENDING -> SENDING is the re-claim of a row whose worker crashed (lease expired).
-  SENDING: ["SENDING", "SENT", "FAILED"],
+  SENDING: ["SENDING", "RETRYING", "SENT", "FAILED"],
+  RETRYING: ["SENDING"],
   SENT: [],
   FAILED: [],
 };

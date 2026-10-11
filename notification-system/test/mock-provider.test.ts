@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockProvider } from "../src/providers/mock.js";
+import { ProviderError } from "../src/providers/provider.js";
 
 const req = { notificationId: "n", idempotencyKey: "k", destination: "d", payload: { body: "b" } };
 const noSleep = async () => {};
@@ -43,5 +44,19 @@ describe("MockProvider", () => {
     roll = 0.9;
     await p.send(req);
     expect(p.deliveries).toBe(1);
+  });
+
+  it("fails with a retryable ProviderError when it simulates a transient failure", async () => {
+    const p = new MockProvider("m", { latencyMs: 0, failureRate: 1 }, () => 0, noSleep);
+    const err = await p.send(req).catch((e) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.retryable).toBe(true);
+  });
+
+  it("rejects a destination containing 'invalid' permanently, whatever the failure rate", async () => {
+    const p = new MockProvider("m", { latencyMs: 0, failureRate: 0 }, () => 0.99, noSleep);
+    const err = await p.send({ ...req, destination: "invalid-token-123" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.retryable).toBe(false);
   });
 });

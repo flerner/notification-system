@@ -1,4 +1,4 @@
-import type { ChannelProvider, DeliveryRequest } from "./provider.js";
+import { ProviderError, type ChannelProvider, type DeliveryRequest } from "./provider.js";
 
 export interface MockOptions {
   latencyMs: number;
@@ -7,6 +7,7 @@ export interface MockOptions {
 
 // Stand-in for a real provider so the project runs with no credentials. Latency and failures
 // are configurable, which lets us demonstrate slow providers, retries and dashboards.
+// A destination containing "invalid" always fails permanently, like a bad device token would.
 // `random` and `sleep` are injectable so tests are instant and deterministic.
 //
 // Like a provider with idempotency support, it delivers a given idempotencyKey only once:
@@ -30,8 +31,11 @@ export class MockProvider implements ChannelProvider {
       this.suppressed++;
       return;
     }
+    if (req.destination.includes("invalid")) {
+      throw new ProviderError(`${this.name}: invalid destination`, false);
+    }
     if (this.random() < this.opts.failureRate) {
-      throw new Error(`${this.name}: simulated provider failure`);
+      throw new ProviderError(`${this.name}: simulated provider failure`, true);
     }
     this.delivered.add(req.idempotencyKey);
     this.deliveries++;

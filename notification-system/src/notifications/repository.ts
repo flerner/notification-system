@@ -58,6 +58,8 @@ export interface NotificationRepository {
   // Return false when the notification was not in a state that allows the change.
   markSent(id: string): Promise<boolean>;
   markFailed(id: string, error: string): Promise<boolean>;
+  // The delivery failed with a retryable error: park it until its retry message comes back.
+  markRetrying(id: string, error: string): Promise<boolean>;
 }
 
 const COLUMNS = `id, request_id AS "requestId", user_id AS "userId", channel, platform,
@@ -155,6 +157,14 @@ export class PgNotificationRepository implements NotificationRepository {
       `UPDATE notifications SET status = 'SENT', sent_at = now(), last_error = NULL
        WHERE id = $1 AND status = ANY($2)`,
       [id, predecessors("SENT")],
+    );
+    return rowCount === 1;
+  }
+
+  async markRetrying(id: string, error: string): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "UPDATE notifications SET status = 'RETRYING', last_error = $2, lease_expires_at = NULL WHERE id = $1 AND status = ANY($3)",
+      [id, error, predecessors("RETRYING")],
     );
     return rowCount === 1;
   }

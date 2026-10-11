@@ -1,5 +1,6 @@
 import amqp, { type ChannelModel, type ConfirmChannel } from "amqplib";
 import type { Logger } from "pino";
+import type { QueueSpec } from "../notifications/queues.js";
 import { withTimeout } from "./timeout.js";
 
 // What the rest of the code depends on, so tests can swap in a fake broker.
@@ -20,7 +21,7 @@ export class RabbitPublisher implements MessagePublisher {
 
   constructor(
     private readonly url: string,
-    private readonly queues: readonly string[],
+    private readonly queues: readonly QueueSpec[],
     private readonly log: Logger,
   ) {}
 
@@ -56,7 +57,7 @@ export class RabbitPublisher implements MessagePublisher {
     const connection = await amqp.connect(this.url, { timeout: 3000 });
     const channel = await connection.createConfirmChannel();
     // Queues are durable so they survive a broker restart. Declaring is idempotent.
-    for (const q of this.queues) await channel.assertQueue(q, { durable: true });
+    for (const q of this.queues) await channel.assertQueue(q.name, { durable: true, arguments: q.args });
 
     // After any failure drop the cached channel: the next publish reconnects. An 'error'
     // event with no listener would crash the process, so we always listen.

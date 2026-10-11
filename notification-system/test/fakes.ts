@@ -111,6 +111,13 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     return true;
   }
 
+  async markRetrying(id: string, error: string): Promise<boolean> {
+    const row = this.rows.find((r) => r.id === id)!;
+    if (!predecessors("RETRYING").includes(row.status)) return false;
+    Object.assign(row, { status: "RETRYING", lastError: error, leaseExpiresAt: undefined });
+    return true;
+  }
+
   async markFailed(id: string, error: string): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
     if (!predecessors("FAILED").includes(row.status)) return false;
@@ -123,9 +130,11 @@ export class InMemoryNotificationRepository implements NotificationRepository {
 export class FakePublisher implements MessagePublisher {
   published: { queue: string; message: object }[] = [];
   down = false;
+  // Publishing to these queues fails while the rest works, e.g. to test a failing dead-letter queue.
+  failQueues = new Set<string>();
 
   async publish(queue: string, message: object): Promise<void> {
-    if (this.down) throw new Error("broker down");
+    if (this.down || this.failQueues.has(queue)) throw new Error("broker down");
     this.published.push({ queue, message });
   }
 }
