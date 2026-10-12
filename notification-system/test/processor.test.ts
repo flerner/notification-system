@@ -62,7 +62,7 @@ beforeEach(() => {
 const store = (queue = "email", destination = "a@x.com") =>
   repo
     .insertPending([
-      { requestId: "r", userId: "1", channel: queue === "email" ? "email" : "sms", platform: null, destination, queue, payload: { subject: "S", body: "B" } },
+      { requestId: "r", userId: "1", clientId: "c", channel: queue === "email" ? "email" : "sms", platform: null, destination, queue, payload: { subject: "S", body: "B" } },
     ])
     .then(([n]) => n!);
 const run = (id: string, queue = "email") => processor.process(id, queue);
@@ -367,7 +367,7 @@ describe("rate limit", () => {
   const storeFor = (userId: string) =>
     repo
       .insertPending([
-        { requestId: "r", userId, channel: "email", platform: null, destination: "a@x.com", queue: "email", payload: { body: "B" } },
+        { requestId: "r", userId, clientId: "c", channel: "email", platform: null, destination: "a@x.com", queue: "email", payload: { body: "B" } },
       ])
       .then(([n]) => n!);
 

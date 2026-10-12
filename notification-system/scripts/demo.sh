@@ -5,7 +5,7 @@
 # Try it with several workers: `docker compose up -d --scale worker=3`.   Usage: ./scripts/demo.sh
 set -u
 J='content-type: application/json'
-send() { curl -s -XPOST localhost:3000/v1/notifications -H "$J" -d "$1" -w '  [HTTP %{http_code}]\n'; }
+send() { curl -s -u demo-key:demo-secret -XPOST localhost:3000/v1/notifications -H "$J" -d "$1" -w '  [HTTP %{http_code}]\n'; }
 sql()  { docker compose exec -T postgres psql -U notif -d notifications "$@"; }
 
 echo "=== health";            curl -s localhost:3000/health; echo

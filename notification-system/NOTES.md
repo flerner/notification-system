@@ -204,6 +204,19 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 ### D-26: The limiter fails open
 - If Redis is down or slow the notification is allowed and a warning is logged (verified: Redis stopped, 5 of 5 emails sent). The cap is a courtesy to the user, not a safety rule; blocking every notification (password resets included) because Redis is down would be worse. **Cost:** during an outage the cap is not enforced and a flood could reach users. The worker's Redis client fails fast (`enableOfflineQueue: false`, 500 ms) so the check never holds a worker up. M10: metric for "limiter unavailable".
 
+### D-27: Authentication with appKey / appSecret as HTTP Basic, secrets stored hashed
+- Book: only authenticated or verified clients may send notifications. Every endpoint except `/live` and `/health` needs `Authorization: Basic base64(appKey:appSecret)` (`curl -u key:secret`). Clients live in a `clients` table; `npm run create-client -- <name>` generates credentials and prints the secret once; `npm run seed` creates a development client (`demo-key` / `demo-secret`, well known, never for production).
+- **Only a SHA-256 hash of the secret is stored.** A fast hash is right because our secrets are 256 random bits: there is nothing to guess, and slow hashing (bcrypt, argon2) exists for weak human-chosen passwords. The comparison is constant-time and an unknown key goes through the same comparison, so timing does not reveal which keys exist.
+- Missing, malformed, unknown key, wrong secret and revoked client all return the same 401 body, so the response never says which part was wrong. Authentication runs before the body is parsed (a bad body with no credentials is a 401).
+- **Trade-offs:** Basic auth sends the secret on every request, so the API must only be reachable over HTTPS (terminated at the load balancer: not in this project). No per-client permissions: every client may do everything (send, edit templates, change settings, register users). No brute-force protection (a limit per IP or per key would be the next step). The user and device endpoints would in reality be called by end-user apps with per-user auth; here trusted backend services call them.
+
+### D-28: Idempotency keys belong to a client; every notification records its client
+- `idempotency_keys` primary key is now `(client_id, key)`. Before authentication the key was global, so a client who guessed another's key would have had that client's request replayed back: a data leak. Now two clients can use the same key and never see each other's requests (tested at the API and against Postgres).
+- `notifications.client_id` records who asked for each notification: the first question after a spam incident. Existing rows belong to `anonymous`.
+
+### D-29: Secrets never reach the logs
+- The default request log includes every header, `Authorization` among them. The logger now records only id, method, URL and the client id (`customProps`). A test sends a request with a known secret and asserts the log contains neither the secret nor the encoded header.
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---
@@ -358,6 +371,7 @@ Be honest and specific. Keep appending.
 - 2026-10-11: M6 (retries, DLQ, timeouts, circuit breaker) generated with Claude Code. I reviewed the trade-offs: RabbitMQ retry queues vs DB-driven retries, why the breaker is checked before the claim, why FAILED rows are the truth and the DLQ is a signal.
 - 2026-10-11: M7 (opt-out, templates, cache) generated with Claude Code. I reviewed why consent and contacts are not cached, why the opt-out check is in the worker, and why the idempotency hash covers the request as sent.
 - 2026-10-11: M8 (rate limiting) generated with Claude Code. I reviewed: why the worker enforces it, why only the first attempt takes a slot, why a Lua script, and the fail-open trade-off.
+- 2026-10-12: M9 (authentication) generated with Claude Code. I reviewed: why a fast hash is enough for generated secrets, why every failure returns the same 401, and the idempotency-key leak that per-client scoping closes. Verified on the real stack afterwards: 401 for missing/wrong credentials, 200 with the dev client, two clients using the same Idempotency-Key got separate requests, a revoked client was refused at once, and the logs contained none of the secrets.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

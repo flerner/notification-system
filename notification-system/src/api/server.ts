@@ -2,11 +2,13 @@ import express, { type ErrorRequestHandler } from "express";
 import type { Logger } from "pino";
 import { pinoHttp } from "pino-http";
 import { ZodError } from "zod";
+import type { ClientRepository } from "../clients/repository.js";
 import { runHealthChecks, type HealthCheck } from "../infra/health.js";
 import type { NotificationService } from "../notifications/service.js";
 import type { SettingsRepository } from "../notifications/settings.js";
 import type { TemplateRepository } from "../notifications/templates.js";
 import type { UserRepository } from "../users/repository.js";
+import { requireClient } from "./auth.js";
 import { notificationRoutes } from "./notifications.js";
 import { settingsRoutes } from "./settings.js";
 import { templateRoutes } from "./templates.js";
@@ -20,11 +22,20 @@ export function buildServer(opts: {
   notifications: NotificationService;
   settings: SettingsRepository;
   templates: TemplateRepository;
+  clients: ClientRepository;
 }) {
   const app = express();
 
-  app.use(pinoHttp({ logger: opts.logger })); // one structured log line per request
-  app.use(express.json({ limit: "100kb" }));
+  // One structured log line per request. The request is logged as id, method and URL only: the
+  // default also logs every header, which would put the caller's Authorization (their secret) in the
+  // logs. The caller is identified by client id instead.
+  app.use(
+    pinoHttp({
+      logger: opts.logger,
+      serializers: { req: (req) => ({ id: req.id, method: req.method, url: req.url }) },
+      customProps: (_req, res) => ({ client: res.locals.client?.id }),
+    }),
+  );
 
   // Liveness: the process is up. Used by nothing that should restart us on a dependency outage.
   app.get("/live", (_req, res) => {
@@ -36,6 +47,11 @@ export function buildServer(opts: {
     const report = await runHealthChecks(opts.healthChecks);
     res.status(report.ok ? 200 : 503).json(report);
   });
+
+  // Everything below needs a verified client. This comes before the body is parsed, so a caller with
+  // no credentials gets a 401 and costs us nothing more.
+  app.use(requireClient(opts.clients));
+  app.use(express.json({ limit: "100kb" }));
 
   app.use(userRoutes(opts.users));
   app.use(notificationRoutes(opts.notifications));

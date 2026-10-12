@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { TemplateNotFoundError, TemplateParamError } from "../notifications/templates.js";
+import type { Client } from "../clients/credentials.js";
 import { templateName } from "./templates.js";
 import {
   IdempotencyKeyReuseError,
@@ -52,7 +53,7 @@ export function notificationRoutes(service: NotificationService): Router {
         : { kind: "template", name: input.template, params: input.params ?? {} };
     const key = idempotencyKey.parse(req.get("Idempotency-Key"));
     try {
-      const { requestId, notifications, replayed } = await service.send({ userId, channel, content }, key);
+      const { requestId, notifications, replayed } = await service.send({ clientId: (res.locals.client as Client).id, userId, channel, content }, key);
       if (replayed) res.set("Idempotent-Replayed", "true");
       // 202, not 201: the notification is stored and queued, not delivered yet.
       res.status(202).json({

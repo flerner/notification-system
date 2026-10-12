@@ -25,6 +25,7 @@ export type Content =
   | { kind: "template"; name: string; params: Params };
 
 export interface SendRequest {
+  clientId: string; // the authenticated client making the request
   userId: string;
   channel: Channel;
   content: Content;
@@ -56,7 +57,7 @@ export class NotificationService {
   async send(req: SendRequest, idempotencyKey?: string): Promise<SendResult> {
     const hash = requestHash(req);
     if (idempotencyKey) {
-      const existing = await this.notifications.findByKey(idempotencyKey);
+      const existing = await this.notifications.findByKey(req.clientId, idempotencyKey);
       if (existing) return this.replay(existing, hash);
     }
 
@@ -76,6 +77,7 @@ export class NotificationService {
       (d): NewNotification => ({
         requestId,
         userId: req.userId,
+        clientId: req.clientId,
         channel: req.channel,
         platform: d.platform,
         destination: d.destination,
@@ -91,7 +93,7 @@ export class NotificationService {
       // Lost a race: a concurrent request with the same key committed between our check above
       // and our insert. The database picked the winner; we return its result.
       if (err instanceof DuplicateKeyError && idempotencyKey) {
-        const existing = await this.notifications.findByKey(idempotencyKey);
+        const existing = await this.notifications.findByKey(req.clientId, idempotencyKey);
         if (existing) return this.replay(existing, hash);
       }
       throw err;

@@ -16,6 +16,7 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
   const row = (over: Partial<NewNotification> = {}): NewNotification => ({
     requestId: "7b1f0f0e-8b8e-4b52-9a57-0f3f5a9d2c11",
     userId,
+    clientId: "client-a",
     channel: "email",
     platform: null,
     destination: "a@x.com",
@@ -176,10 +177,10 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
 
     it("stores the key with the notifications and finds them again", async () => {
       const [n] = await repo.insertPending([row()], { key: "evt-1", hash: "h1" });
-      const found = await repo.findByKey("evt-1");
+      const found = await repo.findByKey("client-a", "evt-1");
       expect(found).toMatchObject({ requestHash: "h1", requestId: n!.requestId });
       expect(found!.notifications.map((x) => x.id)).toEqual([n!.id]);
-      expect(await repo.findByKey("unknown")).toBeNull();
+      expect(await repo.findByKey("client-a", "unknown")).toBeNull();
     });
 
     it("rejects a second insert with the same key and stores nothing from it", async () => {
@@ -209,7 +210,7 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     it("does not keep the key when the notifications could not be stored (same transaction)", async () => {
       const bad = row({ channel: "push", platform: null }); // violates the push-needs-platform CHECK
       await expect(repo.insertPending([bad], { key: "evt-bad", hash: "h" })).rejects.toThrow();
-      expect(await repo.findByKey("evt-bad")).toBeNull();
+      expect(await repo.findByKey("client-a", "evt-bad")).toBeNull();
     });
   });
 });

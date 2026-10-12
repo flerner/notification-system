@@ -12,6 +12,7 @@ export interface Notification {
   id: string;
   requestId: string;
   userId: string;
+  clientId: string; // the client that asked for it
   channel: Channel;
   platform: Platform | null;
   destination: string; // email address, phone number or device token
@@ -50,7 +51,8 @@ export interface NotificationRepository {
   // Atomic: every destination of the request is stored or none is. With `idempotency`, the key
   // is stored in the same transaction; throws DuplicateKeyError if it already exists.
   insertPending(rows: NewNotification[], idempotency?: { key: string; hash: string }): Promise<Notification[]>;
-  findByKey(key: string): Promise<IdempotencyRecord | null>;
+  // Keys belong to the client that sent them.
+  findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null>;
   markPublished(ids: string[]): Promise<void>;
   // Rows the broker never confirmed and that are old enough not to be a publish in flight.
   findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]>;
@@ -69,7 +71,7 @@ export interface NotificationRepository {
   markRetrying(id: string, error: string): Promise<boolean>;
 }
 
-const COLUMNS = `id, request_id AS "requestId", user_id AS "userId", channel, platform,
+const COLUMNS = `id, request_id AS "requestId", user_id AS "userId", client_id AS "clientId", channel, platform,
   destination, queue, payload, status, attempts, created_at AS "createdAt"`;
 
 export class PgNotificationRepository implements NotificationRepository {
@@ -87,18 +89,18 @@ export class PgNotificationRepository implements NotificationRepository {
         // commits or rolls back, then either inserts (it rolled back) or does nothing (it won).
         // That wait is what makes two simultaneous identical requests safe.
         const { rowCount } = await client.query(
-          `INSERT INTO idempotency_keys (key, request_hash, request_id) VALUES ($1, $2, $3)
-           ON CONFLICT (key) DO NOTHING`,
-          [idempotency.key, idempotency.hash, rows[0]!.requestId],
+          `INSERT INTO idempotency_keys (client_id, key, request_hash, request_id) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (client_id, key) DO NOTHING`,
+          [rows[0]!.clientId, idempotency.key, idempotency.hash, rows[0]!.requestId],
         );
         if (rowCount === 0) throw new DuplicateKeyError(idempotency.key);
       }
       const created: Notification[] = [];
       for (const r of rows) {
         const { rows: inserted } = await client.query(
-          `INSERT INTO notifications (request_id, user_id, channel, platform, destination, queue, payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${COLUMNS}`,
-          [r.requestId, r.userId, r.channel, r.platform, r.destination, r.queue, r.payload],
+          `INSERT INTO notifications (request_id, user_id, client_id, channel, platform, destination, queue, payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${COLUMNS}`,
+          [r.requestId, r.userId, r.clientId, r.channel, r.platform, r.destination, r.queue, r.payload],
         );
         created.push(inserted[0]);
       }
@@ -112,10 +114,11 @@ export class PgNotificationRepository implements NotificationRepository {
     }
   }
 
-  async findByKey(key: string): Promise<IdempotencyRecord | null> {
+  async findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null> {
     const { rows } = await this.db.query(
-      `SELECT request_id AS "requestId", request_hash AS "requestHash" FROM idempotency_keys WHERE key = $1`,
-      [key],
+      `SELECT request_id AS "requestId", request_hash AS "requestHash" FROM idempotency_keys
+       WHERE client_id = $1 AND key = $2`,
+      [clientId, key],
     );
     if (rows.length === 0) return null;
     const { rows: notifications } = await this.db.query(

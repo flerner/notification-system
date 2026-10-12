@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import { pino } from "pino";
 import { loadConfig } from "../infra/config.js";
 import { migrate } from "../infra/migrate.js";
+import { PgClientRepository } from "../clients/repository.js";
 import { RedisCache } from "../infra/cache.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
@@ -43,6 +44,7 @@ const app = buildServer({
   notifications,
   templates,
   settings: new PgSettingsRepository(db),
+  clients: new PgClientRepository(db),
   healthChecks: [
     { name: "postgres", check: async () => void (await db.query("SELECT 1")) },
     { name: "redis", check: async () => void (await redis.ping()) },

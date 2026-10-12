@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "seed": "tsx scripts/seed.ts",
+    "create-client": "tsx scripts/create-client.ts",
     "dev:api": "tsx watch src/api/main.ts",
     "start:api": "node dist/api/main.js"
   },

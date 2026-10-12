@@ -3,6 +3,7 @@ import { IdempotencyKeyReuseError, NoDestinationError, UnknownUserError } from "
 import { TemplateNotFoundError, TemplateParamError } from "../src/notifications/templates.js";
 import { buildTestApp } from "./fakes.js";
 
+const CLIENT = "client-a";
 let t: ReturnType<typeof buildTestApp>;
 beforeEach(() => {
   t = buildTestApp();
@@ -18,7 +19,7 @@ const content = { kind: "text" as const, body: "hello" };
 describe("NotificationService.send", () => {
   it("stores one row and queues it on the channel's queue", async () => {
     const user = await userWith({ email: "a@x.com" });
-    const { notifications } = await t.notifications.send({ userId: user.id, channel: "email", content });
+    const { notifications } = await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "email", content });
 
     expect(t.notificationRows.rows).toHaveLength(1);
     expect(t.notificationRows.rows[0]).toMatchObject({ destination: "a@x.com", queue: "email", status: "PENDING" });
@@ -31,7 +32,7 @@ describe("NotificationService.send", () => {
       { platform: "ios", token: "t-ios" },
       { platform: "android", token: "t-android" },
     ]);
-    const { requestId, notifications } = await t.notifications.send({ userId: user.id, channel: "push", content });
+    const { requestId, notifications } = await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "push", content });
 
     expect(notifications.map((n) => n.queue).sort()).toEqual(["push.android", "push.ios"]);
     expect(new Set(notifications.map((n) => n.requestId))).toEqual(new Set([requestId]));
@@ -42,14 +43,14 @@ describe("NotificationService.send", () => {
     const user = await userWith({ phone: "+14155550123" });
     t.publisher.down = true;
 
-    const { notifications } = await t.notifications.send({ userId: user.id, channel: "sms", content });
+    const { notifications } = await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "sms", content });
 
     expect(notifications).toHaveLength(1);
     expect(t.notificationRows.rows[0]!.publishedAt).toBeNull(); // nothing lost, just not queued yet
   });
 
   it("rejects an unknown user and stores nothing", async () => {
-    await expect(t.notifications.send({ userId: "999", channel: "email", content })).rejects.toBeInstanceOf(UnknownUserError);
+    await expect(t.notifications.send({ clientId: CLIENT, userId: "999", channel: "email", content })).rejects.toBeInstanceOf(UnknownUserError);
     expect(t.notificationRows.rows).toHaveLength(0);
   });
 
@@ -59,7 +60,7 @@ describe("NotificationService.send", () => {
     ["push", { email: "a@x.com" }], // no devices
   ] as const)("rejects %s when the user has no destination for it", async (channel, contact) => {
     const user = await userWith(contact);
-    await expect(t.notifications.send({ userId: user.id, channel, content })).rejects.toBeInstanceOf(NoDestinationError);
+    await expect(t.notifications.send({ clientId: CLIENT, userId: user.id, channel, content })).rejects.toBeInstanceOf(NoDestinationError);
     expect(t.notificationRows.rows).toHaveLength(0);
   });
 });
@@ -68,7 +69,7 @@ describe("NotificationService.relayUnpublished", () => {
   it("queues notifications that were stored while the broker was down", async () => {
     const user = await userWith({ email: "a@x.com" });
     t.publisher.down = true;
-    await t.notifications.send({ userId: user.id, channel: "email", content });
+    await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "email", content });
     expect(t.publisher.published).toHaveLength(0);
 
     t.publisher.down = false; // broker recovers
@@ -80,7 +81,7 @@ describe("NotificationService.relayUnpublished", () => {
 
   it("does nothing once everything is published", async () => {
     const user = await userWith({ email: "a@x.com" });
-    await t.notifications.send({ userId: user.id, channel: "email", content });
+    await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "email", content });
     expect(await t.notifications.relayUnpublished(0)).toBe(0);
     expect(t.publisher.published).toHaveLength(1);
   });
@@ -88,7 +89,7 @@ describe("NotificationService.relayUnpublished", () => {
   it("leaves rows unpublished while the broker is still down", async () => {
     const user = await userWith({ email: "a@x.com" });
     t.publisher.down = true;
-    await t.notifications.send({ userId: user.id, channel: "email", content });
+    await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "email", content });
     expect(await t.notifications.relayUnpublished(0)).toBe(0);
     expect(t.notificationRows.rows[0]!.publishedAt).toBeNull();
   });
@@ -96,7 +97,7 @@ describe("NotificationService.relayUnpublished", () => {
 
 describe("NotificationService.send: idempotency (layer 1)", () => {
   const send = (userId: string, key?: string, body = "hello") =>
-    t.notifications.send({ userId, channel: "email", content: { kind: "text", body } }, key);
+    t.notifications.send({ clientId: CLIENT, userId, channel: "email", content: { kind: "text", body } }, key);
 
   it("a retry with the same key returns the original notifications and creates nothing new", async () => {
     const user = await userWith({ email: "a@x.com" });
@@ -145,7 +146,7 @@ describe("NotificationService.send: idempotency (layer 1)", () => {
     // Simulate: our findByKey ran before the winner committed, so it saw nothing.
     const realFind = t.notificationRows.findByKey.bind(t.notificationRows);
     let calls = 0;
-    t.notificationRows.findByKey = async (k) => (calls++ === 0 ? null : realFind(k));
+    t.notificationRows.findByKey = async (c, k) => (calls++ === 0 ? null : realFind(c, k));
 
     const loser = await send(user.id, "evt-1");
 
@@ -157,7 +158,7 @@ describe("NotificationService.send: idempotency (layer 1)", () => {
 
 describe("NotificationService.send: templates", () => {
   const useTemplate = (userId: string, params: Record<string, string | number | boolean>, key?: string) =>
-    t.notifications.send({ userId, channel: "email", content: { kind: "template", name: "shipped", params } }, key);
+    t.notifications.send({ clientId: CLIENT, userId, channel: "email", content: { kind: "template", name: "shipped", params } }, key);
 
   beforeEach(async () => {
     await t.templates.upsert({ name: "shipped", channel: "email", subject: "Order {{order}} shipped", body: "Hi {{name}}, order {{order}} is on its way" });
@@ -177,7 +178,7 @@ describe("NotificationService.send: templates", () => {
     const user = await userWith({ phone: "+14155550123" });
     await t.templates.upsert({ name: "shipped", channel: "sms", body: "Order {{order}} shipped" });
 
-    await t.notifications.send({ userId: user.id, channel: "sms", content: { kind: "template", name: "shipped", params: { order: 7 } } });
+    await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "sms", content: { kind: "template", name: "shipped", params: { order: 7 } } });
 
     expect(t.notificationRows.rows[0]!.payload).toEqual({ subject: undefined, body: "Order 7 shipped" });
   });
@@ -185,7 +186,7 @@ describe("NotificationService.send: templates", () => {
   it("rejects an unknown template and stores nothing", async () => {
     const user = await userWith({ email: "a@x.com" });
     await expect(
-      t.notifications.send({ userId: user.id, channel: "email", content: { kind: "template", name: "nope", params: {} } }),
+      t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "email", content: { kind: "template", name: "nope", params: {} } }),
     ).rejects.toBeInstanceOf(TemplateNotFoundError);
     expect(t.notificationRows.rows).toHaveLength(0);
   });

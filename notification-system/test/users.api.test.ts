@@ -1,13 +1,12 @@
-import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildTestApp } from "./fakes.js";
+import { authed, buildTestApp } from "./fakes.js";
 
 let app: ReturnType<typeof buildTestApp>["app"];
 beforeEach(() => {
   app = buildTestApp().app;
 });
 
-const createUser = (payload: object) => request(app).post("/users").send(payload);
+const createUser = (payload: object) => authed(app).post("/users").send(payload);
 
 describe("POST /users", () => {
   it("creates a user with an email, lowercasing it", async () => {
@@ -26,7 +25,7 @@ describe("POST /users", () => {
   });
 
   it("rejects malformed JSON with 400", async () => {
-    const res = await request(app).post("/users").set("content-type", "application/json").send("{not json");
+    const res = await authed(app).post("/users").set("content-type", "application/json").send("{not json");
     expect(res.status).toBe(400);
   });
 
@@ -37,7 +36,7 @@ describe("POST /users", () => {
 });
 
 describe("POST /users/:id/devices", () => {
-  const register = (id: string, payload: object) => request(app).post(`/users/${id}/devices`).send(payload);
+  const register = (id: string, payload: object) => authed(app).post(`/users/${id}/devices`).send(payload);
 
   it("registers a device for an existing user", async () => {
     const { id } = (await createUser({ email: "a@x.com" })).body;

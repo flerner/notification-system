@@ -1,4 +1,7 @@
+import request from "supertest";
 import { pino } from "pino";
+import { hashSecret } from "../src/clients/credentials.js";
+import type { ClientRecord, ClientRepository } from "../src/clients/repository.js";
 import type { Cache } from "../src/infra/cache.js";
 import { buildServer } from "../src/api/server.js";
 import type { MessagePublisher } from "../src/infra/rabbit.js";
@@ -64,14 +67,15 @@ export class InMemoryUserRepository implements UserRepository {
 // changes from state.ts). The Postgres tests check the real thing; this keeps the other tests fast.
 export class InMemoryNotificationRepository implements NotificationRepository {
   rows: (Notification & { publishedAt: Date | null; sentAt?: Date; lastError?: string; leaseExpiresAt?: number })[] = [];
-  keys = new Map<string, { requestId: string; requestHash: string }>();
+  keys = new Map<string, { requestId: string; requestHash: string }>(); // keyed by "clientId:key"
   // Tests move time by replacing this, so lease expiry needs no sleeping.
   now = () => Date.now();
 
   async insertPending(rows: NewNotification[], idempotency?: { key: string; hash: string }): Promise<Notification[]> {
     if (idempotency) {
-      if (this.keys.has(idempotency.key)) throw new DuplicateKeyError(idempotency.key);
-      this.keys.set(idempotency.key, { requestId: rows[0]!.requestId, requestHash: idempotency.hash });
+      const scoped = `${rows[0]!.clientId}:${idempotency.key}`;
+      if (this.keys.has(scoped)) throw new DuplicateKeyError(idempotency.key);
+      this.keys.set(scoped, { requestId: rows[0]!.requestId, requestHash: idempotency.hash });
     }
     const created = rows.map((r, i) => ({
       ...r,
@@ -85,8 +89,8 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     return created;
   }
 
-  async findByKey(key: string): Promise<IdempotencyRecord | null> {
-    const k = this.keys.get(key);
+  async findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null> {
+    const k = this.keys.get(`${clientId}:${key}`);
     if (!k) return null;
     return { ...k, notifications: this.rows.filter((r) => r.requestId === k.requestId) };
   }
@@ -195,6 +199,33 @@ export class InMemoryRateLimiter implements RateLimiter {
   }
 }
 
+export class InMemoryClientRepository implements ClientRepository {
+  clients = new Map<string, ClientRecord>();
+
+  async findByKey(appKey: string): Promise<ClientRecord | null> {
+    return this.clients.get(appKey) ?? null;
+  }
+
+  async create(c: { appKey: string; name: string; secretHash: string }): Promise<void> {
+    this.clients.set(c.appKey, { ...c, revokedAt: null });
+  }
+
+  revoke(appKey: string): void {
+    this.clients.get(appKey)!.revokedAt = new Date();
+  }
+}
+
+// The client every test authenticates as, unless it says otherwise.
+export const TEST_KEY = "test-client";
+export const TEST_SECRET = "test-secret";
+
+// supertest with the test client's credentials already attached.
+export const authed = (app: Parameters<typeof request>[0], key = TEST_KEY, secret = TEST_SECRET) => ({
+  get: (url: string) => request(app).get(url).auth(key, secret),
+  post: (url: string) => request(app).post(url).auth(key, secret),
+  put: (url: string) => request(app).put(url).auth(key, secret),
+});
+
 export class InMemoryCache implements Cache {
   entries = new Map<string, { value: string; ttlSeconds: number }>();
   async get(key: string) {
@@ -222,13 +253,15 @@ export class FakePublisher implements MessagePublisher {
 }
 
 // The whole app wired with fakes; tests grab the pieces they want to inspect.
-export function buildTestApp(healthChecks: HealthCheck[] = []) {
+export function buildTestApp(healthChecks: HealthCheck[] = [], logger = silentLogger) {
   const users = new InMemoryUserRepository();
   const notificationRows = new InMemoryNotificationRepository();
   const templates = new InMemoryTemplateRepository();
   const settings = new InMemorySettingsRepository(users);
   const publisher = new FakePublisher();
+  const clients = new InMemoryClientRepository();
+  void clients.create({ appKey: TEST_KEY, name: "tests", secretHash: hashSecret(TEST_SECRET) });
   const notifications = new NotificationService(users, notificationRows, templates, publisher, silentLogger);
-  const app = buildServer({ logger: silentLogger, healthChecks, users, notifications, settings, templates });
-  return { app, users, notificationRows, templates, settings, publisher, notifications };
+  const app = buildServer({ logger, healthChecks, users, notifications, settings, templates, clients });
+  return { app, users, notificationRows, templates, settings, publisher, notifications, clients };
 }

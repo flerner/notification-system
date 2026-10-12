@@ -18,8 +18,12 @@ sequenceDiagram
     participant DB as Postgres
     participant MQ as RabbitMQ
 
-    C->>A: POST /v1/notifications (Idempotency-Key: K)
-    A->>DB: look up key K
+    C->>A: POST /v1/notifications (Authorization: Basic appKey:secret, Idempotency-Key: K)
+    A->>DB: find the client by appKey, compare the hash of the secret
+    alt unknown key, wrong secret, or revoked client
+        A-->>C: 401 invalid credentials (the same answer for all three)
+    end
+    A->>DB: look up key K for this client
     alt K already stored (the caller is retrying)
         DB-->>A: original request and its notifications
         A-->>C: 202 same requestId, Idempotent-Replayed: true
@@ -29,7 +33,7 @@ sequenceDiagram
             A->>A: read the template (Redis cache, else Postgres) and fill in the params
             Note over A: unknown template or missing param: 422, nothing stored
         end
-        A->>DB: one transaction: store key K + one PENDING row per destination
+        A->>DB: one transaction: store key K (for this client) + one PENDING row per destination, each recording the client
         Note over A,DB: the key and the rows exist together or not at all
         A->>MQ: publish {notificationId} to the channel's queue, wait for confirm
         alt broker confirmed

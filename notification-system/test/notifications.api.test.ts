@@ -1,13 +1,12 @@
-import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildTestApp } from "./fakes.js";
+import { authed, buildTestApp } from "./fakes.js";
 
 let t: ReturnType<typeof buildTestApp>;
 beforeEach(() => {
   t = buildTestApp();
 });
 
-const send = (payload: object) => request(t.app).post("/v1/notifications").send(payload);
+const send = (payload: object) => authed(t.app).post("/v1/notifications").send(payload);
 
 describe("POST /v1/notifications", () => {
   it("answers 202 with the created notifications", async () => {
@@ -48,7 +47,7 @@ describe("POST /v1/notifications", () => {
 
 describe("Idempotency-Key header", () => {
   const sendWithKey = (key: string, payload: object) =>
-    request(t.app).post("/v1/notifications").set("Idempotency-Key", key).send(payload);
+    authed(t.app).post("/v1/notifications").set("Idempotency-Key", key).send(payload);
 
   it("replays the original answer on a retry and says so", async () => {
     const user = await t.users.createUser({ email: "a@x.com" });
