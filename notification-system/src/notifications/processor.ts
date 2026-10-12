@@ -4,6 +4,7 @@ import { ProviderError } from "../providers/provider.js";
 import type { GuardedProvider } from "../providers/guarded.js";
 import { DEAD_LETTER_QUEUE, retryQueueName } from "./queues.js";
 import type { Notification, NotificationRepository } from "./repository.js";
+import type { RateLimiter } from "./rate-limit.js";
 import type { SettingsRepository } from "./settings.js";
 import type { RetryPolicy } from "./retry.js";
 
@@ -24,7 +25,8 @@ export type ProcessResult = "done" | "busy" | "circuit_open";
 //  3. The provider gets the notification id as idempotency key, so providers that honour it
 //     drop the repeated send.
 //
-// Before sending, a user who has opted out of the channel is skipped (SKIPPED_OPT_OUT, final).
+// Before sending, a user who has opted out of the channel is skipped (SKIPPED_OPT_OUT, final), and
+// so is one who has already received their limit for the channel (SKIPPED_RATE_LIMITED, final).
 //
 // When delivery fails (a ProviderError, see GuardedProvider):
 //  - permanent error            -> FAILED now, nothing to retry.
@@ -39,6 +41,7 @@ export class NotificationProcessor {
   constructor(
     private readonly notifications: NotificationRepository,
     private readonly settings: SettingsRepository,
+    private readonly limiter: RateLimiter,
     private readonly providers: Record<string, GuardedProvider>,
     private readonly publisher: MessagePublisher,
     private readonly policy: RetryPolicy,
@@ -61,10 +64,16 @@ export class NotificationProcessor {
     switch (claim.outcome) {
       case "missing":
         // Rows are stored before they are queued, so this should not happen.
-        this.log.warn({ notificationId }, "queued notification not found, dropping");
+        this.log.warn(
+          { notificationId },
+          "queued notification not found, dropping",
+        );
         return "done";
       case "done":
-        this.log.info({ notificationId }, "already handled, skipping duplicate message");
+        this.log.info(
+          { notificationId },
+          "already handled, skipping duplicate message",
+        );
         return "done";
       case "busy":
         return "busy";
@@ -76,8 +85,40 @@ export class NotificationProcessor {
     // notification may have waited in a queue (or a retry queue) while the user opted out. Every
     // attempt checks again.
     if (!(await this.settings.isOptedIn(n.userId, n.channel))) {
-      await this.notifications.markSkipped(n.id, "SKIPPED_OPT_OUT", `user ${n.userId} opted out of ${n.channel}`);
-      this.log.info({ notificationId, userId: n.userId, channel: n.channel, reason: "opt_out" }, "notification skipped");
+      await this.notifications.markSkipped(
+        n.id,
+        "SKIPPED_OPT_OUT",
+        `user ${n.userId} opted out of ${n.channel}`,
+      );
+      this.log.info(
+        {
+          notificationId,
+          userId: n.userId,
+          channel: n.channel,
+          reason: "opt_out",
+        },
+        "notification skipped",
+      );
+      return "done";
+    }
+
+    //only attempt 1 because retries are not counted against the rate limit
+    if (n.attempts === 1 && !(await this.limiter.allow(n.userId, n.channel))) {
+      const { max, windowSeconds } = this.limiter.limitFor(n.channel);
+      await this.notifications.markSkipped(
+        n.id,
+        "SKIPPED_RATE_LIMITED",
+        `rate limit reached for user ${n.userId}: ${max} ${n.channel} per ${windowSeconds}s`,
+      );
+      this.log.info(
+        {
+          notificationId,
+          userId: n.userId,
+          channel: n.channel,
+          reason: "rate_limit",
+        },
+        "notification skipped",
+      );
       return "done";
     }
 
@@ -94,13 +135,24 @@ export class NotificationProcessor {
     }
     const recorded = await this.notifications.markSent(n.id);
     this.log.info(
-      { notificationId, queue: n.queue, provider: provider.name, attempt: n.attempts, ms: Date.now() - started, recorded },
+      {
+        notificationId,
+        queue: n.queue,
+        provider: provider.name,
+        attempt: n.attempts,
+        ms: Date.now() - started,
+        recorded,
+      },
       "notification sent",
     );
     return "done";
   }
 
-  private async handleFailure(n: Notification, providerName: string, err: ProviderError): Promise<ProcessResult> {
+  private async handleFailure(
+    n: Notification,
+    providerName: string,
+    err: ProviderError,
+  ): Promise<ProcessResult> {
     if (!err.retryable) return this.giveUp(n, err.message, "permanent");
 
     const delay = this.policy.delayAfter(n.attempts);
@@ -111,26 +163,55 @@ export class NotificationProcessor {
     // the notification again (sooner than the backoff, which is acceptable).
     const parked = await this.notifications.markRetrying(n.id, err.message);
     if (!parked) return "done"; // someone else finished or took it over meanwhile
-    await this.publisher.publish(retryQueueName(n.queue, delay), { notificationId: n.id });
+    await this.publisher.publish(retryQueueName(n.queue, delay), {
+      notificationId: n.id,
+    });
     this.log.warn(
-      { notificationId: n.id, queue: n.queue, provider: providerName, attempt: n.attempts, retryInMs: delay, err: err.message },
+      {
+        notificationId: n.id,
+        queue: n.queue,
+        provider: providerName,
+        attempt: n.attempts,
+        retryInMs: delay,
+        err: err.message,
+      },
       "delivery failed, will retry",
     );
     return "done";
   }
 
-  private async giveUp(n: Notification, error: string, reason: "permanent" | "exhausted"): Promise<ProcessResult> {
+  private async giveUp(
+    n: Notification,
+    error: string,
+    reason: "permanent" | "exhausted",
+  ): Promise<ProcessResult> {
     await this.notifications.markFailed(n.id, error);
     // An alert-level log: M10 turns these (and the dead-letter queue depth) into a Grafana alert.
     this.log.error(
-      { event: "notification_failed", notificationId: n.id, queue: n.queue, attempts: n.attempts, reason, err: error },
+      {
+        event: "notification_failed",
+        notificationId: n.id,
+        queue: n.queue,
+        attempts: n.attempts,
+        reason,
+        err: error,
+      },
       "notification failed for good",
     );
     try {
-      await this.publisher.publish(DEAD_LETTER_QUEUE, { notificationId: n.id, queue: n.queue, reason, error, attempts: n.attempts });
+      await this.publisher.publish(DEAD_LETTER_QUEUE, {
+        notificationId: n.id,
+        queue: n.queue,
+        reason,
+        error,
+        attempts: n.attempts,
+      });
     } catch (err) {
       // The row already says FAILED; failing to announce it must not make the worker redo the send.
-      this.log.error({ err, notificationId: n.id }, "could not publish to the dead-letter queue");
+      this.log.error(
+        { err, notificationId: n.id },
+        "could not publish to the dead-letter queue",
+      );
     }
     return "done";
   }

@@ -36,6 +36,9 @@ services:
       PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-10000}
       BREAKER_FAILURE_THRESHOLD: ${BREAKER_FAILURE_THRESHOLD:-5}
       BREAKER_COOLDOWN_MS: ${BREAKER_COOLDOWN_MS:-30000}
+      RATE_LIMIT_PUSH: ${RATE_LIMIT_PUSH:-20/3600}
+      RATE_LIMIT_SMS: ${RATE_LIMIT_SMS:-5/3600}
+      RATE_LIMIT_EMAIL: ${RATE_LIMIT_EMAIL:-10/3600}
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }

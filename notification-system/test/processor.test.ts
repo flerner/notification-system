@@ -6,7 +6,7 @@ import { CircuitBreaker } from "../src/providers/circuit-breaker.js";
 import { GuardedProvider } from "../src/providers/guarded.js";
 import { MockProvider } from "../src/providers/mock.js";
 import { ProviderError, type ChannelProvider, type DeliveryRequest } from "../src/providers/provider.js";
-import { FakePublisher, InMemoryNotificationRepository, InMemorySettingsRepository, silentLogger } from "./fakes.js";
+import { FakePublisher, InMemoryNotificationRepository, InMemoryRateLimiter, InMemorySettingsRepository, silentLogger } from "./fakes.js";
 
 const LEASE = 1000;
 const DELAYS = [1000, 5000]; // -> at most 3 attempts
@@ -26,6 +26,7 @@ const permanent = () => Promise.reject(new ProviderError("invalid device token",
 
 let repo: InMemoryNotificationRepository;
 let settings: InMemorySettingsRepository;
+let limiter: InMemoryRateLimiter;
 let publisher: FakePublisher;
 let email: ScriptedProvider;
 let breaker: CircuitBreaker;
@@ -36,6 +37,7 @@ function build(provider: ChannelProvider = email) {
   return new NotificationProcessor(
     repo,
     settings,
+    limiter,
     { email: new GuardedProvider(provider, breaker, 1000), sms: new GuardedProvider(new ScriptedProvider("sms"), new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 }), 1000) },
     publisher,
     new RetryPolicy(DELAYS),
@@ -49,6 +51,7 @@ beforeEach(() => {
   repo = new InMemoryNotificationRepository();
   repo.now = () => clock;
   settings = new InMemorySettingsRepository();
+  limiter = new InMemoryRateLimiter();
   publisher = new FakePublisher();
   email = new ScriptedProvider("email-provider");
   // High threshold: only the circuit breaker tests below want the circuit to open.
@@ -357,5 +360,98 @@ describe("opt-out", () => {
     };
     await expect(run(n.id)).rejects.toThrow("database down");
     expect(email.calls).toHaveLength(0);
+  });
+});
+
+describe("rate limit", () => {
+  const storeFor = (userId: string) =>
+    repo
+      .insertPending([
+        { requestId: "r", userId, channel: "email", platform: null, destination: "a@x.com", queue: "email", payload: { body: "B" } },
+      ])
+      .then(([n]) => n!);
+
+  beforeEach(() => {
+    limiter = new InMemoryRateLimiter({ max: 2, windowSeconds: 60 });
+    processor = build();
+  });
+
+  it("sends up to the limit and skips the next ones, recording why", async () => {
+    const [a, b, c] = [await store(), await store(), await store()];
+    for (const n of [a, b, c]) await run(n.id);
+
+    const status = (id: string) => repo.rows.find((r) => r.id === id)!;
+    expect(status(a.id).status).toBe("SENT");
+    expect(status(b.id).status).toBe("SENT");
+    expect(status(c.id)).toMatchObject({ status: "SKIPPED_RATE_LIMITED", attempts: 1 });
+    expect(status(c.id).lastError).toBe("rate limit reached for user 1: 2 email per 60s");
+    expect(email.calls).toHaveLength(2); // the third never reached the provider
+  });
+
+  it("a skipped notification is not retried and not dead-lettered: nothing failed", async () => {
+    await run((await store()).id);
+    await run((await store()).id);
+    await run((await store()).id);
+    expect(publisher.published).toEqual([]);
+  });
+
+  it("a skipped notification stays skipped when a duplicate of its message arrives", async () => {
+    await run((await store()).id);
+    await run((await store()).id);
+    const third = await store();
+    await run(third.id);
+    limiter.counts.clear(); // the window ends
+
+    expect(await run(third.id)).toBe("done");
+    expect(repo.rows.find((r) => r.id === third.id)!.status).toBe("SKIPPED_RATE_LIMITED");
+    expect(email.calls).toHaveLength(2);
+  });
+
+  it("counts each user separately", async () => {
+    const mine = [await storeFor("1"), await storeFor("1"), await storeFor("1")];
+    const theirs = await storeFor("2");
+    for (const n of mine) await run(n.id);
+    await run(theirs.id);
+
+    expect(repo.rows.find((r) => r.id === mine[2]!.id)!.status).toBe("SKIPPED_RATE_LIMITED");
+    expect(repo.rows.find((r) => r.id === theirs.id)!.status).toBe("SENT");
+  });
+
+  it("a retry does not use up another slot: only the first attempt asks the limiter", async () => {
+    const n = await store();
+    email.behaviour = transient;
+    await run(n.id); // attempt 1: takes a slot, fails, waits as RETRYING
+    email.behaviour = transient;
+    await run(n.id); // attempt 2
+    email.behaviour = async () => {};
+    await run(n.id); // attempt 3: succeeds
+
+    expect(repo.rows[0]).toMatchObject({ status: "SENT", attempts: 3 });
+    expect(limiter.calls).toHaveLength(1);
+  });
+
+  it("a notification skipped for opt-out takes no slot", async () => {
+    const n = await store();
+    settings.optedOut.add(`${n.userId}:email`);
+    await run(n.id);
+    expect(limiter.calls).toHaveLength(0);
+  });
+
+  it("is not asked when the circuit is open: no claim, no slot", async () => {
+    breaker = new CircuitBreaker({ failureThreshold: 1, cooldownMs: 10_000 }, () => clock);
+    processor = build();
+    email.behaviour = transient;
+    await run((await store()).id); // opens the circuit
+    limiter.calls.length = 0;
+
+    expect(await run((await store()).id)).toBe("circuit_open");
+    expect(limiter.calls).toHaveLength(0);
+  });
+
+  it("lets a limiter failure propagate if it is thrown (a limiter that fails open never throws)", async () => {
+    limiter.allow = async () => {
+      throw new Error("boom");
+    };
+    await expect(run((await store()).id)).rejects.toThrow("boom");
   });
 });

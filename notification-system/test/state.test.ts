@@ -19,6 +19,10 @@ describe("notification state machine", () => {
     expect(predecessors("SKIPPED_OPT_OUT")).toEqual(["SENDING"]);
   });
 
+  it("lets a SENDING attempt end as skipped because of the rate limit, and nothing else", () => {
+    expect(predecessors("SKIPPED_RATE_LIMITED")).toEqual(["SENDING"]);
+  });
+
   it("never goes back to PENDING", () => {
     expect(predecessors("PENDING")).toEqual([]);
   });
@@ -28,6 +32,6 @@ describe("notification state machine", () => {
   });
 
   it("treats SENT and FAILED as terminal and nothing else", () => {
-    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED", "SKIPPED_OPT_OUT"]);
+    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED", "SKIPPED_OPT_OUT", "SKIPPED_RATE_LIMITED"]);
   });
 });

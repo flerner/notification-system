@@ -1,3 +1,4 @@
+import { Redis } from "ioredis";
 import pg from "pg";
 import { pino } from "pino";
 import { loadConfig } from "../infra/config.js";
@@ -6,6 +7,7 @@ import { allQueues, DEAD_LETTER_QUEUE, QUEUES } from "../notifications/queues.js
 import { RetryPolicy } from "../notifications/retry.js";
 import { NotificationProcessor } from "../notifications/processor.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
+import { parseRateLimit, RedisRateLimiter } from "../notifications/rate-limit.js";
 import { PgSettingsRepository } from "../notifications/settings.js";
 import { buildProviders } from "../providers/index.js";
 import { startWorker } from "./consumer.js";
@@ -27,6 +29,19 @@ if (config.CLAIM_LEASE_MS <= config.PROVIDER_TIMEOUT_MS) {
   throw new Error("CLAIM_LEASE_MS must be greater than PROVIDER_TIMEOUT_MS");
 }
 
+// Fail fast when Redis is slow or unreachable: the rate limiter then lets the notification through
+// (see RedisRateLimiter) instead of holding up the worker.
+const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 500 });
+const limiter = new RedisRateLimiter(
+  redis,
+  {
+    push: parseRateLimit(config.RATE_LIMIT_PUSH),
+    sms: parseRateLimit(config.RATE_LIMIT_SMS),
+    email: parseRateLimit(config.RATE_LIMIT_EMAIL),
+  },
+  logger,
+);
+
 const providers = buildProviders({
   latencyMs: config.MOCK_LATENCY_MS,
   failureRate: config.MOCK_FAILURE_RATE,
@@ -42,6 +57,7 @@ const publisher = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETR
 const processor = new NotificationProcessor(
   new PgNotificationRepository(db),
   new PgSettingsRepository(db),
+  limiter,
   providers,
   publisher,
   new RetryPolicy(config.RETRY_DELAYS_MS),
@@ -69,6 +85,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     await worker.stop(); // finishes the messages in progress first
     await publisher.close();
     await db.end();
+    redis.disconnect();
     process.exit(0);
   });
 }

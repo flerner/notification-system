@@ -71,6 +71,7 @@ sequenceDiagram
     participant MQ as RabbitMQ
     participant W as Worker
     participant DB as Postgres
+    participant R as Redis
     participant P as Provider
 
     MQ->>W: push {notificationId} (at most prefetch unacknowledged)
@@ -82,15 +83,25 @@ sequenceDiagram
         W->>DB: SENDING to SKIPPED_OPT_OUT (final, nothing is sent)
         W->>MQ: ack
     else opted in
-        W->>P: send, idempotency key = notification id, 10 s timeout
-        P-->>W: accepted
-        W->>DB: SENDING to SENT
-        W->>MQ: ack (only now)
+        opt first attempt only (a retry is the same notification)
+            W->>R: take a slot: one atomic Lua script, count for this user and channel
+            R-->>W: allowed, or over the limit
+        end
+        alt over the limit
+            W->>DB: SENDING to SKIPPED_RATE_LIMITED (final, nothing is sent)
+            W->>MQ: ack
+        else within the limit
+            W->>P: send, idempotency key = notification id, 10 s timeout
+            P-->>W: accepted
+            W->>DB: SENDING to SENT
+            W->>MQ: ack (only now)
+        end
     end
 ```
 
 The opt-in check is repeated on every attempt, so a user who opts out while a retry is waiting is not
-sent to.
+sent to. The rate limit takes one slot per notification, on its first attempt only. If Redis is down the
+limiter lets the notification through.
 
 ## 4. A retryable failure, then success
 
@@ -239,7 +250,9 @@ stateDiagram-v2
     SENDING --> RETRYING: retryable failure, attempts left
     SENDING --> FAILED: permanent failure or attempts used up
     SENDING --> SKIPPED_OPT_OUT: the user opted out of the channel
+    SENDING --> SKIPPED_RATE_LIMITED: the user reached the limit for the channel
     SENT --> [*]
     FAILED --> [*]
     SKIPPED_OPT_OUT --> [*]
+    SKIPPED_RATE_LIMITED --> [*]
 ```

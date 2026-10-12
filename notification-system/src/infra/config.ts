@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// "20/3600" means 20 per 3600 seconds. Kept as a string here and parsed where it is used.
+const rateLimitSpec = (fallback: string) =>
+  z.string().regex(/^[1-9]\d*\/[1-9]\d*$/, "must look like 20/3600 (max per window in seconds)").default(fallback);
+
 const schema = z.object({
   PORT: z.coerce.number().int().default(3000),
   LOG_LEVEL: z
@@ -38,6 +42,11 @@ const schema = z.object({
   // for the cooldown.
   BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
   BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30000),
+  // Frequency cap per user and channel, as "max/windowSeconds": at most `max` notifications within
+  // `windowSeconds`. Counted by the worker when it is about to send (see rate-limit.ts).
+  RATE_LIMIT_PUSH: rateLimitSpec("20/3600"),
+  RATE_LIMIT_SMS: rateLimitSpec("5/3600"),
+  RATE_LIMIT_EMAIL: rateLimitSpec("10/3600"),
   // Mock providers: simulated delivery time and failure probability.
   MOCK_LATENCY_MS: z.coerce.number().int().nonnegative().default(50),
   MOCK_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0),

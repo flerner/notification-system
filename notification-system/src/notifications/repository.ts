@@ -36,7 +36,7 @@ export interface IdempotencyRecord {
 export class DuplicateKeyError extends Error {}
 
 // Final statuses for notifications deliberately not sent.
-export type SkippedStatus = "SKIPPED_OPT_OUT";
+export type SkippedStatus = "SKIPPED_OPT_OUT" | "SKIPPED_RATE_LIMITED";
 
 export type ClaimResult =
   | { outcome: "claimed"; notification: Notification }
@@ -61,7 +61,8 @@ export interface NotificationRepository {
   // Return false when the notification was not in a state that allows the change.
   markSent(id: string): Promise<boolean>;
   markFailed(id: string, error: string): Promise<boolean>;
-  // The attempt ended without sending because of a rule, not an error (e.g. the user opted out).
+  // The attempt ended without sending because of a rule, not an error (the user opted out, or has
+  // reached the rate limit).
   // Final. `detail` says why and is kept in last_error.
   markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean>;
   // The delivery failed with a retryable error: park it until its retry message comes back.

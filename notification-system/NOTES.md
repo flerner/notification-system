@@ -191,6 +191,19 @@ Format: **Decision / Why / Trade-off / Book ref.** Add an entry every time we de
 - **Deliberately not cached, although the book lists user and device info:** (1) opt-in settings: consent must be authoritative, and a stale entry would send to someone who opted out, while a primary-key read is cheap at ~185/s; (2) user contacts and devices: a device token moves between users (the upsert), so invalidation is easy to get wrong and a stale entry could send one person's notification to someone else.
 - **Trade-off:** if Redis is up but the invalidation fails, an edited template can be served stale for up to the TTL.
 
+### D-24: Frequency cap per user and channel, enforced by the worker, one slot per notification
+- Config `RATE_LIMIT_PUSH|SMS|EMAIL` as `max/windowSeconds` (defaults 20/3600, 5/3600, 10/3600). The worker checks after the claim and the opt-out check, just before the provider call. Over the limit: `SKIPPED_RATE_LIMITED` (final, reason in `last_error`, no retry, no dead letter: nothing failed).
+- **Why the worker and not the API:** the cap is about what the user *receives*. Counting at accept time would let a backlog accepted over an hour be delivered in one burst and still pass.
+- **One slot per notification:** only the first attempt asks the limiter; a retry is the same notification and takes no second slot. An opted-out notification takes no slot. A slot taken by a notification that then fails permanently is not given back (conservative, simple).
+- Verified: 5 emails at 3/60 gave 3 SENT and 2 skipped; 12 simultaneous emails across 3 workers gave exactly 3 SENT; after the window the counter vanished and sending resumed.
+
+### D-25: Fixed window counter in Redis, one Lua script
+- `INCR` + `EXPIRE` in a single script: Redis runs it without interleaving, so concurrent workers get distinct counts (exactly `max` are allowed) and a counter can never be left without an expiry (which would block a user for good; the script also repairs a counter that lost its TTL). The window starts at the user's first notification and the counter disappears when it ends, so no clocks are compared between machines.
+- **Trade-offs (book ch. 4):** up to 2x the limit around a window boundary; refused attempts are counted too (the counter can read above `max`, harmless). A sliding window counter or a token bucket would smooth the boundary at the price of more state and a bigger script. For an hourly "do not annoy people" cap the simple one is enough.
+
+### D-26: The limiter fails open
+- If Redis is down or slow the notification is allowed and a warning is logged (verified: Redis stopped, 5 of 5 emails sent). The cap is a courtesy to the user, not a safety rule; blocking every notification (password resets included) because Redis is down would be worse. **Cost:** during an outage the cap is not enforced and a flood could reach users. The worker's Redis client fails fast (`enableOfflineQueue: false`, 500 ms) so the check never holds a worker up. M10: metric for "limiter unavailable".
+
 *(add more as we go: retry policy, rate-limit algorithm, circuit breaker params, pool sizes, etc.)*
 
 ---
@@ -344,6 +357,7 @@ Be honest and specific. Keep appending.
 - 2026-10-10: M5 (idempotency, claims, state machine) generated with Claude Code. I reviewed the design: three layers, why a claim without a lease loses notifications, why `busy` messages must not be acked.
 - 2026-10-11: M6 (retries, DLQ, timeouts, circuit breaker) generated with Claude Code. I reviewed the trade-offs: RabbitMQ retry queues vs DB-driven retries, why the breaker is checked before the claim, why FAILED rows are the truth and the DLQ is a signal.
 - 2026-10-11: M7 (opt-out, templates, cache) generated with Claude Code. I reviewed why consent and contacts are not cached, why the opt-out check is in the worker, and why the idempotency hash covers the request as sent.
+- 2026-10-11: M8 (rate limiting) generated with Claude Code. I reviewed: why the worker enforces it, why only the first attempt takes a slot, why a Lua script, and the fail-open trade-off.
 - *(add: what AI generated, what I changed, what I rejected, what I rewrote because I didn't understand it)*
 
 ---

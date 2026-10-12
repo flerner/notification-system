@@ -14,6 +14,7 @@ import {
 import { isTerminal, predecessors } from "../src/notifications/state.js";
 import { NotificationService } from "../src/notifications/service.js";
 import type { Channel } from "../src/notifications/queues.js";
+import type { RateLimit, RateLimiter } from "../src/notifications/rate-limit.js";
 import type { SettingsRepository } from "../src/notifications/settings.js";
 import type { Template, TemplateRepository } from "../src/notifications/templates.js";
 import {
@@ -172,6 +173,25 @@ export class InMemorySettingsRepository implements SettingsRepository {
     if (this.users && !(await this.users.findContacts(userId))) return null;
     const has = (c: Channel) => !this.optedOut.has(`${userId}:${c}`);
     return { push: has("push"), sms: has("sms"), email: has("email") };
+  }
+}
+
+// Counts per user and channel like the real limiter, without time: the window never ends.
+export class InMemoryRateLimiter implements RateLimiter {
+  counts = new Map<string, number>();
+  calls: { userId: string; channel: Channel }[] = [];
+  constructor(private readonly limit: RateLimit = { max: 1_000_000, windowSeconds: 3600 }) {}
+
+  async allow(userId: string, channel: Channel): Promise<boolean> {
+    this.calls.push({ userId, channel });
+    const key = `${channel}:${userId}`;
+    const count = (this.counts.get(key) ?? 0) + 1;
+    this.counts.set(key, count);
+    return count <= this.limit.max;
+  }
+
+  limitFor(): RateLimit {
+    return this.limit;
   }
 }
 

@@ -155,6 +155,16 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
       expect(await repo.markSent(n!.id)).toBe(false);
     });
 
+    it("records a notification over the rate limit as SKIPPED_RATE_LIMITED, final", async () => {
+      const [n] = await repo.insertPending([row()]);
+      await repo.claim(n!.id, 60_000);
+      expect(await repo.markSkipped(n!.id, "SKIPPED_RATE_LIMITED", "rate limit reached")).toBe(true);
+
+      const { rows } = await pool.query("SELECT status, last_error FROM notifications WHERE id = $1", [n!.id]);
+      expect(rows[0]).toMatchObject({ status: "SKIPPED_RATE_LIMITED", last_error: "rate limit reached" });
+      expect((await repo.claim(n!.id, 60_000)).outcome).toBe("done");
+    });
+
     it("the database rejects a status outside the state machine", async () => {
       const [n] = await repo.insertPending([row()]);
       await expect(pool.query("UPDATE notifications SET status = 'DELIVERED' WHERE id = $1", [n!.id])).rejects.toThrow();
