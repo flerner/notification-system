@@ -4,6 +4,7 @@ import { ProviderError } from "../providers/provider.js";
 import type { GuardedProvider } from "../providers/guarded.js";
 import { DEAD_LETTER_QUEUE, retryQueueName } from "./queues.js";
 import type { Notification, NotificationRepository } from "./repository.js";
+import { NotificationMetrics } from "./metrics.js";
 import type { RateLimiter } from "./rate-limit.js";
 import type { SettingsRepository } from "./settings.js";
 import type { RetryPolicy } from "./retry.js";
@@ -49,6 +50,7 @@ export class NotificationProcessor {
     // Must be longer than the slowest provider call (the provider timeout), or a healthy worker
     // loses its claim.
     private readonly leaseMs: number,
+    private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
   // `queue` is the queue this message came from; it tells us which provider is needed before we
@@ -58,7 +60,10 @@ export class NotificationProcessor {
     if (!provider) throw new Error(`no provider configured for queue ${queue}`);
 
     // Before claiming: a notification must not use up an attempt against a provider that is down.
-    if (provider.isOpen()) return "circuit_open";
+    if (provider.isOpen()) {
+      this.metrics.circuitHeld(queue);
+      return "circuit_open";
+    }
 
     const claim = await this.notifications.claim(notificationId, this.leaseMs);
     switch (claim.outcome) {
@@ -74,6 +79,7 @@ export class NotificationProcessor {
           { notificationId },
           "already handled, skipping duplicate message",
         );
+        this.metrics.duplicateDropped();
         return "done";
       case "busy":
         return "busy";
@@ -99,6 +105,7 @@ export class NotificationProcessor {
         },
         "notification skipped",
       );
+      this.metrics.skipped(n.channel, "opt_out");
       return "done";
     }
 
@@ -119,6 +126,7 @@ export class NotificationProcessor {
         },
         "notification skipped",
       );
+      this.metrics.skipped(n.channel, "rate_limit");
       return "done";
     }
 
@@ -131,9 +139,12 @@ export class NotificationProcessor {
         payload: n.payload,
       });
     } catch (err) {
+      this.metrics.providerCall(n.channel, provider.name, "error", (Date.now() - started) / 1000);
       return this.handleFailure(n, provider.name, err as ProviderError);
     }
+    this.metrics.providerCall(n.channel, provider.name, "ok", (Date.now() - started) / 1000);
     const recorded = await this.notifications.markSent(n.id);
+    this.metrics.sent(n.channel, (Date.now() - n.createdAt.getTime()) / 1000);
     this.log.info(
       {
         notificationId,
@@ -166,6 +177,7 @@ export class NotificationProcessor {
     await this.publisher.publish(retryQueueName(n.queue, delay), {
       notificationId: n.id,
     });
+    this.metrics.retryScheduled(n.channel);
     this.log.warn(
       {
         notificationId: n.id,
@@ -186,6 +198,7 @@ export class NotificationProcessor {
     reason: "permanent" | "exhausted",
   ): Promise<ProcessResult> {
     await this.notifications.markFailed(n.id, error);
+    this.metrics.failed(n.channel, reason);
     // An alert-level log: M10 turns these (and the dead-letter queue depth) into a Grafana alert.
     this.log.error(
       {

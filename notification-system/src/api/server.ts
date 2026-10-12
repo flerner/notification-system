@@ -1,5 +1,6 @@
 import express, { type ErrorRequestHandler } from "express";
 import type { Logger } from "pino";
+import type { Registry } from "prom-client";
 import { pinoHttp } from "pino-http";
 import { ZodError } from "zod";
 import type { ClientRepository } from "../clients/repository.js";
@@ -9,6 +10,7 @@ import type { SettingsRepository } from "../notifications/settings.js";
 import type { TemplateRepository } from "../notifications/templates.js";
 import type { UserRepository } from "../users/repository.js";
 import { requireClient } from "./auth.js";
+import { httpMetrics } from "./http-metrics.js";
 import { notificationRoutes } from "./notifications.js";
 import { settingsRoutes } from "./settings.js";
 import { templateRoutes } from "./templates.js";
@@ -23,6 +25,7 @@ export function buildServer(opts: {
   settings: SettingsRepository;
   templates: TemplateRepository;
   clients: ClientRepository;
+  registry?: Registry; // where request metrics go; none in tests that do not look at them
 }) {
   const app = express();
 
@@ -36,6 +39,8 @@ export function buildServer(opts: {
       customProps: (_req, res) => ({ client: res.locals.client?.id }),
     }),
   );
+
+  if (opts.registry) app.use(httpMetrics(opts.registry));
 
   // Liveness: the process is up. Used by nothing that should restart us on a dependency outage.
   app.get("/live", (_req, res) => {

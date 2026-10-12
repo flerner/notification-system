@@ -15,6 +15,10 @@ export class GuardedProvider {
     return this.provider.name;
   }
 
+  get state(): "closed" | "open" | "half_open" {
+    return this.breaker.state;
+  }
+
   // True while the provider is considered down: the caller should not even try.
   isOpen(): boolean {
     return this.breaker.isOpen();

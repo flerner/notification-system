@@ -5,3 +5,4 @@ node_modules/
 *.pdf
 dist/
 notification-system/TECH_DECISIONS.md
+.playwright-mcp/

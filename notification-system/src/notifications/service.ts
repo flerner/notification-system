@@ -10,6 +10,7 @@ import {
   type NotificationRepository,
   type Payload,
 } from "./repository.js";
+import { NotificationMetrics } from "./metrics.js";
 import { queueFor, type Channel } from "./queues.js";
 import { render, TemplateNotFoundError, type Params, type TemplateRepository } from "./templates.js";
 
@@ -45,6 +46,7 @@ export class NotificationService {
     private readonly templates: TemplateRepository,
     private readonly publisher: MessagePublisher,
     private readonly log: Logger,
+    private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
   // Persist first, publish second. Once the rows are stored the request is accepted: even if
@@ -98,6 +100,7 @@ export class NotificationService {
       }
       throw err;
     }
+    this.metrics.accepted(req.channel, notifications.length);
     await this.publish(notifications);
     return { requestId, notifications, replayed: false };
   }
@@ -116,6 +119,7 @@ export class NotificationService {
     if (existing.requestHash !== hash) {
       throw new IdempotencyKeyReuseError("Idempotency-Key was already used with a different request");
     }
+    this.metrics.replayed();
     // Not published again: if the original publish failed, the relay takes care of it.
     return { requestId: existing.requestId, notifications: existing.notifications, replayed: true };
   }

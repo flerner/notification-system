@@ -1,5 +1,6 @@
 import type { Redis } from "ioredis";
 import type { Logger } from "pino";
+import { NotificationMetrics } from "./metrics.js";
 import type { Channel } from "./queues.js";
 
 // At most `max` notifications to one user on one channel within `windowSeconds`.
@@ -46,6 +47,7 @@ export class RedisRateLimiter implements RateLimiter {
     private readonly redis: Redis,
     private readonly limits: RateLimits,
     private readonly log: Logger,
+    private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
   limitFor(channel: Channel): RateLimit {
@@ -68,6 +70,7 @@ export class RedisRateLimiter implements RateLimiter {
         { err, userId, channel },
         "rate limiter unavailable, allowing the notification",
       );
+      this.metrics.redisError("rate_limiter");
       return true;
     }
   }

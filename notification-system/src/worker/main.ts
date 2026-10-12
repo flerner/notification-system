@@ -2,18 +2,23 @@ import { Redis } from "ioredis";
 import pg from "pg";
 import { pino } from "pino";
 import { loadConfig } from "../infra/config.js";
+import { createRegistry, startMetricsServer } from "../infra/metrics.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
 import { allQueues, DEAD_LETTER_QUEUE, QUEUES } from "../notifications/queues.js";
 import { RetryPolicy } from "../notifications/retry.js";
 import { NotificationProcessor } from "../notifications/processor.js";
+import { NotificationMetrics } from "../notifications/metrics.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
 import { parseRateLimit, RedisRateLimiter } from "../notifications/rate-limit.js";
 import { PgSettingsRepository } from "../notifications/settings.js";
 import { buildProviders } from "../providers/index.js";
 import { startWorker } from "./consumer.js";
+import { registerCircuitGauge } from "./metrics.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.LOG_LEVEL });
+const registry = createRegistry();
+const metrics = new NotificationMetrics(registry);
 
 const queues = config.WORKER_QUEUES.length > 0 ? config.WORKER_QUEUES : [...QUEUES];
 const unknown = queues.filter((q) => !(QUEUES as readonly string[]).includes(q));
@@ -40,6 +45,7 @@ const limiter = new RedisRateLimiter(
     email: parseRateLimit(config.RATE_LIMIT_EMAIL),
   },
   logger,
+  metrics,
 );
 
 const providers = buildProviders({
@@ -48,6 +54,7 @@ const providers = buildProviders({
   timeoutMs: config.PROVIDER_TIMEOUT_MS,
   breaker: { failureThreshold: config.BREAKER_FAILURE_THRESHOLD, cooldownMs: config.BREAKER_COOLDOWN_MS },
 });
+registerCircuitGauge(registry, providers);
 const missing = queues.filter((q) => !providers[q]);
 if (missing.length > 0) throw new Error(`No provider configured for: ${missing.join(", ")}`);
 
@@ -63,6 +70,7 @@ const processor = new NotificationProcessor(
   new RetryPolicy(config.RETRY_DELAYS_MS),
   logger,
   config.CLAIM_LEASE_MS,
+  metrics,
 );
 
 const worker = await startWorker(
@@ -71,6 +79,7 @@ const worker = await startWorker(
   logger,
   (message) => publisher.publish(DEAD_LETTER_QUEUE, message),
 );
+const metricsServer = startMetricsServer(registry, config.METRICS_PORT);
 logger.info({ queues, prefetch: config.WORKER_PREFETCH }, "worker started");
 
 // If the broker connection drops we exit and let Docker restart us (restart: unless-stopped).
@@ -84,6 +93,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
     await worker.stop(); // finishes the messages in progress first
     await publisher.close();
+    metricsServer.close();
     await db.end();
     redis.disconnect();
     process.exit(0);

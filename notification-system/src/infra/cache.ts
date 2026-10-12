@@ -1,5 +1,6 @@
 import type { Redis } from "ioredis";
 import type { Logger } from "pino";
+import { NotificationMetrics } from "../notifications/metrics.js";
 
 // A cache is an optimisation, never a dependency: if it is slow or down, callers must still work
 // by reading the source of truth. So these methods never throw; a failed read is a miss.
@@ -13,6 +14,7 @@ export class RedisCache implements Cache {
   constructor(
     private readonly redis: Redis,
     private readonly log: Logger,
+    private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
   async get(key: string): Promise<string | null> {
@@ -20,6 +22,7 @@ export class RedisCache implements Cache {
       return await this.redis.get(key);
     } catch (err) {
       this.log.warn({ err, key }, "cache read failed, using the database");
+      this.metrics.redisError("template_cache");
       return null;
     }
   }
@@ -29,6 +32,7 @@ export class RedisCache implements Cache {
       await this.redis.set(key, value, "EX", ttlSeconds);
     } catch (err) {
       this.log.warn({ err, key }, "cache write failed");
+      this.metrics.redisError("template_cache");
     }
   }
 
@@ -38,6 +42,7 @@ export class RedisCache implements Cache {
     } catch (err) {
       // The entry may stay stale until its TTL runs out.
       this.log.warn({ err, key }, "cache invalidation failed");
+      this.metrics.redisError("template_cache");
     }
   }
 }

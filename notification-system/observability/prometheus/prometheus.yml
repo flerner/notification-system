@@ -1,0 +1,25 @@
+global:
+  # Short, so a dashboard reacts within seconds while you watch. A real deployment would use 15-30 s.
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # The service name resolves to every replica (docker compose up --scale worker=3), so new
+  # replicas are picked up without changing this file.
+  - job_name: api
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 9464
+  - job_name: worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9464
+  # RabbitMQ's own metrics: queue depths (ready, unacknowledged), including retry and dead-letter queues.
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]

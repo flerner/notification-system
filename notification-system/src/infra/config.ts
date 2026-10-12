@@ -50,6 +50,8 @@ const schema = z.object({
   // Mock providers: simulated delivery time and failure probability.
   MOCK_LATENCY_MS: z.coerce.number().int().nonnegative().default(50),
   MOCK_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0),
+  // Where Prometheus scrapes this process (/metrics). Internal: not published outside Docker.
+  METRICS_PORT: z.coerce.number().int().default(9464),
   MIGRATIONS_DIR: z.string().default("migrations"),
 });
 

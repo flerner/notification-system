@@ -5,7 +5,9 @@ import { loadConfig } from "../infra/config.js";
 import { migrate } from "../infra/migrate.js";
 import { PgClientRepository } from "../clients/repository.js";
 import { RedisCache } from "../infra/cache.js";
+import { createRegistry, startMetricsServer } from "../infra/metrics.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
+import { NotificationMetrics } from "../notifications/metrics.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
 import { allQueues } from "../notifications/queues.js";
 import { startRelay } from "../notifications/relay.js";
@@ -17,6 +19,8 @@ import { buildServer } from "./server.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.LOG_LEVEL });
+const registry = createRegistry();
+const metrics = new NotificationMetrics(registry);
 
 // Pool size is deliberate: Postgres defaults to max 100 connections total and we will run
 // several api/worker replicas, so each process takes a small, bounded slice.
@@ -33,10 +37,11 @@ await migrate(db, config.MIGRATIONS_DIR);
 const users = new PgUserRepository(db);
 const templates = new CachedTemplateRepository(
   new PgTemplateRepository(db),
-  new RedisCache(redis, logger),
+  new RedisCache(redis, logger, metrics),
   config.TEMPLATE_CACHE_TTL_SECONDS,
+  metrics,
 );
-const notifications = new NotificationService(users, new PgNotificationRepository(db), templates, rabbit, logger);
+const notifications = new NotificationService(users, new PgNotificationRepository(db), templates, rabbit, logger, metrics);
 
 const app = buildServer({
   logger,
@@ -45,12 +50,15 @@ const app = buildServer({
   templates,
   settings: new PgSettingsRepository(db),
   clients: new PgClientRepository(db),
+  registry,
   healthChecks: [
     { name: "postgres", check: async () => void (await db.query("SELECT 1")) },
     { name: "redis", check: async () => void (await redis.ping()) },
     { name: "rabbitmq", check: () => rabbit.check() },
   ],
 });
+
+const metricsServer = startMetricsServer(registry, config.METRICS_PORT);
 
 const stopRelay = startRelay(
   notifications,
@@ -62,6 +70,7 @@ const stopRelay = startRelay(
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
     stopRelay();
+    metricsServer.close();
     // Stop accepting connections; the callback fires once in-flight requests finish.
     await new Promise((resolve) => server.close(resolve));
     await rabbit.close();

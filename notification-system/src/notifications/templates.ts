@@ -1,5 +1,6 @@
 import type pg from "pg";
 import type { Cache } from "../infra/cache.js";
+import { NotificationMetrics } from "./metrics.js";
 import type { Channel } from "./queues.js";
 
 export interface Template {
@@ -86,6 +87,7 @@ export class CachedTemplateRepository implements TemplateRepository {
     private readonly inner: TemplateRepository,
     private readonly cache: Cache,
     private readonly ttlSeconds: number,
+    private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
   async find(name: string, channel: Channel): Promise<Template | null> {
@@ -93,11 +95,14 @@ export class CachedTemplateRepository implements TemplateRepository {
     const cached = await this.cache.get(key);
     if (cached !== null) {
       try {
-        return JSON.parse(cached) as Template;
+        const template = JSON.parse(cached) as Template;
+        this.metrics.templateCache("hit");
+        return template;
       } catch {
         // A corrupt entry is just a miss.
       }
     }
+    this.metrics.templateCache("miss");
     //postgre fallback
     const found = await this.inner.find(name, channel);
     if (found)
