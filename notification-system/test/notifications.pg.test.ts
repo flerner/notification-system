@@ -69,6 +69,65 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     expect(byId[b!.id]).toMatchObject({ status: "FAILED", sent: false, last_error: "provider unavailable" });
   });
 
+  describe("scheduled notifications", () => {
+    const inAnHour = () => new Date(Date.now() + 60 * 60 * 1000);
+    // The send times are compared with the DATABASE's clock, which can differ a little from this
+    // machine's (Docker Desktop). So tests wait until the database says a row is due instead of
+    // sleeping for a guessed time.
+    const waitUntilDue = async (count: number) => {
+      const end = Date.now() + 5000;
+      while ((await repo.findUnpublished(0, 10)).length < count) {
+        if (Date.now() > end) throw new Error(`timed out waiting for ${count} notifications to be due`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+
+    it("an ordinary notification's send time is the moment it was stored", async () => {
+      const [n] = await repo.insertPending([row()]);
+      expect(n!.sendAt).toEqual(n!.createdAt);
+    });
+
+    it("a scheduled notification keeps the time it was given", async () => {
+      const at = inAnHour();
+      const [n] = await repo.insertPending([row({ sendAt: at })]);
+      expect(n!.sendAt).toEqual(at);
+      expect(n!.createdAt.getTime()).toBeLessThan(at.getTime());
+    });
+
+    it("a scheduled notification is not found before it is due, even though it is unpublished", async () => {
+      await repo.insertPending([row({ sendAt: inAnHour() })]);
+      expect(await repo.findUnpublished(0, 10)).toHaveLength(0);
+    });
+
+    it("a scheduled notification is found as soon as it is due, without waiting for the minimum age", async () => {
+      const [n] = await repo.insertPending([row({ sendAt: new Date(Date.now() + 150) })]);
+      await waitUntilDue(1);
+      // a minimum age of an hour would hide an ordinary row; a due scheduled one needs no waiting
+      expect((await repo.findUnpublished(60 * 60 * 1000, 10)).map((x) => x.id)).toEqual([n!.id]);
+    });
+
+    it("an ordinary notification still waits for the minimum age, so a publish in flight is not repeated", async () => {
+      await repo.insertPending([row()]);
+      expect(await repo.findUnpublished(60 * 60 * 1000, 10)).toHaveLength(0);
+      expect(await repo.findUnpublished(0, 10)).toHaveLength(1);
+    });
+
+    it("returns what is due oldest first", async () => {
+      const early = new Date(Date.now() + 100);
+      const later = new Date(Date.now() + 200);
+      const [a, b] = await repo.insertPending([row({ sendAt: later }), row({ sendAt: early })]);
+      await waitUntilDue(2);
+      expect((await repo.findUnpublished(0, 10)).map((x) => x.id)).toEqual([b!.id, a!.id]);
+    });
+
+    it("once published it is not found again", async () => {
+      const [n] = await repo.insertPending([row({ sendAt: new Date(Date.now() + 100) })]);
+      await waitUntilDue(1);
+      await repo.markPublished([n!.id]);
+      expect(await repo.findUnpublished(0, 10)).toHaveLength(0);
+    });
+  });
+
   it("ignores rows younger than the minimum age (a publish may still be in flight)", async () => {
     await repo.insertPending([row()]);
     expect(await repo.findUnpublished(60_000, 10)).toHaveLength(0);

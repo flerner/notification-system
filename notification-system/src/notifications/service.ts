@@ -14,6 +14,10 @@ import { NotificationMetrics } from "./metrics.js";
 import { queueFor, type Channel } from "./queues.js";
 import { render, TemplateNotFoundError, type Params, type TemplateRepository } from "./templates.js";
 
+// A time this close to now is not worth deferring: the relay only runs every few seconds, so
+// holding the notification would make it later than asked, not earlier.
+const IMMEDIATE_WINDOW_MS = 1000;
+
 // The user exists but has nothing to deliver to on this channel (no phone, no devices, ...).
 export class NoDestinationError extends Error {}
 export class UnknownUserError extends Error {}
@@ -27,6 +31,8 @@ export type Content =
 
 export interface SendRequest {
   clientId: string; // the authenticated client making the request
+  // Do not send before this time. Missing, past or within a second from now: send now.
+  sendAt?: Date;
   userId: string;
   channel: Channel;
   content: Content;
@@ -74,6 +80,10 @@ export class NotificationService {
     // is reported to the caller instead of failing later in a worker.
     const payload = await this.resolve(req.channel, req.content);
 
+    // Contacts are resolved now, not at send time: a notification scheduled for next week goes to
+    // the devices the user has today. (Resolving later would need the contact lookup in the worker.)
+    const deferred = req.sendAt !== undefined && req.sendAt.getTime() > Date.now() + IMMEDIATE_WINDOW_MS;
+
     const requestId = randomUUID();
     const rows = destinations.map(
       (d): NewNotification => ({
@@ -85,6 +95,7 @@ export class NotificationService {
         destination: d.destination,
         queue: queueFor(req.channel, d.platform),
         payload,
+        sendAt: deferred ? req.sendAt : null,
       }),
     );
 
@@ -101,7 +112,8 @@ export class NotificationService {
       throw err;
     }
     this.metrics.accepted(req.channel, notifications.length);
-    await this.publish(notifications);
+    // A scheduled notification is stored and nothing more: the relay publishes it once it is due.
+    if (!deferred) await this.publish(notifications);
     return { requestId, notifications, replayed: false };
   }
 
@@ -195,5 +207,8 @@ function requestHash(req: SendRequest): string {
     c.kind === "text"
       ? ["text", c.subject ?? null, c.body]
       : ["template", c.name, Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b))];
-  return createHash("sha256").update(JSON.stringify([req.userId, req.channel, content])).digest("hex");
+  // The time asked for is part of the request: the same key with another time is another request.
+  return createHash("sha256")
+    .update(JSON.stringify([req.userId, req.channel, content, req.sendAt?.getTime() ?? null]))
+    .digest("hex");
 }

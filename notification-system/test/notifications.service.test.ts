@@ -228,3 +228,82 @@ describe("NotificationService.send: templates", () => {
     expect((await useTemplate(user.id, { order: 1, name: "Ana" }, "evt-1")).replayed).toBe(true);
   });
 });
+
+describe("NotificationService.send: scheduled notifications", () => {
+  const HOUR = 60 * 60 * 1000;
+  const inAnHour = () => new Date(Date.now() + HOUR);
+  const sendAt = (userId: string, at: Date | undefined, key?: string) =>
+    t.notifications.send({ clientId: CLIENT, userId, channel: "email", content: { kind: "text", body: "later" }, sendAt: at }, key);
+
+  it("stores a notification for later but does not queue it", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const when = inAnHour();
+    const { notifications } = await sendAt(user.id, when);
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sendAt).toEqual(when);
+    expect(t.publisher.published).toHaveLength(0); // nothing on a queue yet
+    expect(t.notificationRows.rows[0]).toMatchObject({ status: "PENDING", publishedAt: null });
+  });
+
+  it("an ordinary notification is queued at once and its send time is now", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const before = Date.now();
+    await sendAt(user.id, undefined);
+    expect(t.publisher.published).toHaveLength(1);
+    expect(t.notificationRows.rows[0]!.sendAt.getTime()).toBeGreaterThanOrEqual(before - 5);
+  });
+
+  it.each([
+    ["in the past", () => new Date(Date.now() - HOUR)],
+    ["half a second ahead", () => new Date(Date.now() + 500)],
+  ])("a time %s means now: queued at once", async (_name, at) => {
+    const user = await userWith({ email: "a@x.com" });
+    await sendAt(user.id, at());
+    expect(t.publisher.published).toHaveLength(1);
+  });
+
+  it("is published by the relay once its time has come, and not before", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    let clock = Date.now();
+    t.notificationRows.now = () => clock;
+    await sendAt(user.id, new Date(clock + HOUR));
+
+    expect(await t.notifications.relayUnpublished(0)).toBe(0); // not due
+    expect(t.publisher.published).toHaveLength(0);
+
+    clock += HOUR + 1; // the time comes
+    expect(await t.notifications.relayUnpublished(0)).toBe(1);
+    expect(t.publisher.published).toEqual([{ queue: "email", message: { notificationId: "n-1" } }]);
+    expect(t.notificationRows.rows[0]!.publishedAt).not.toBeNull();
+  });
+
+  it("a push to two devices schedules both, sharing one send time", async () => {
+    const user = await userWith({ email: "a@x.com" }, [
+      { platform: "ios", token: "t-ios" },
+      { platform: "android", token: "t-android" },
+    ]);
+    const when = inAnHour();
+    const { notifications } = await t.notifications.send({ clientId: CLIENT, userId: user.id, channel: "push", content, sendAt: when });
+    expect(notifications.map((n) => n.sendAt)).toEqual([when, when]);
+    expect(t.publisher.published).toHaveLength(0);
+  });
+
+  it("a retry with the same key and the same time replays, and queues nothing", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    const when = inAnHour();
+    const first = await sendAt(user.id, when, "evt-1");
+    const retry = await sendAt(user.id, new Date(when.getTime()), "evt-1");
+
+    expect(retry.replayed).toBe(true);
+    expect(retry.requestId).toBe(first.requestId);
+    expect(t.notificationRows.rows).toHaveLength(1);
+  });
+
+  it("the same key with a different time is a different request", async () => {
+    const user = await userWith({ email: "a@x.com" });
+    await sendAt(user.id, inAnHour(), "evt-1");
+    await expect(sendAt(user.id, new Date(Date.now() + 2 * HOUR), "evt-1")).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    await expect(sendAt(user.id, undefined, "evt-1")).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+  });
+});

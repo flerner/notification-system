@@ -78,3 +78,52 @@ describe("Idempotency-Key header", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("sendAt", () => {
+  const HOUR = 60 * 60 * 1000;
+  const iso = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const sendWith = (extra: object) => authed(t.app).post("/v1/notifications").send({ channel: "email", body: "hi", ...extra });
+
+  it("a time in the future is accepted, answered with 202 and the time, and not queued", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    const at = iso(HOUR);
+    const res = await sendWith({ userId: user.id, sendAt: at });
+
+    expect(res.status).toBe(202);
+    expect(res.body.notifications[0]).toMatchObject({ status: "PENDING", sendAt: at });
+    expect(t.publisher.published).toHaveLength(0);
+  });
+
+  it("a time in the past is accepted and sent now", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    const res = await sendWith({ userId: user.id, sendAt: iso(-HOUR) });
+    expect(res.status).toBe(202);
+    expect(t.publisher.published).toHaveLength(1);
+  });
+
+  it("accepts a time written with an offset instead of Z, and keeps it as the same moment", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    const instant = new Date(Date.now() + HOUR);
+    const withOffset = new Date(instant.getTime() + 2 * HOUR).toISOString().replace("Z", "+02:00"); // same instant, written two hours ahead
+    const res = await sendWith({ userId: user.id, sendAt: withOffset });
+
+    expect(res.status).toBe(202);
+    expect(res.body.notifications[0].sendAt).toBe(instant.toISOString());
+  });
+
+  it.each([
+    ["a date that is not a time", "next tuesday"],
+    ["a time without an offset", "2026-11-01T09:00:00"],
+    ["a plain date", "2026-11-01"],
+    ["a number", 1893456000],
+  ])("rejects %s with 400", async (_name, bad) => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    expect((await sendWith({ userId: user.id, sendAt: bad })).status).toBe(400);
+  });
+
+  it("rejects a time more than 30 days ahead, but accepts one just inside the limit", async () => {
+    const user = await t.users.createUser({ email: "a@x.com" });
+    expect((await sendWith({ userId: user.id, sendAt: iso(31 * 24 * HOUR) })).status).toBe(400);
+    expect((await sendWith({ userId: user.id, sendAt: iso(29 * 24 * HOUR) })).status).toBe(202);
+  });
+});

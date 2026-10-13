@@ -21,9 +21,12 @@ export interface Notification {
   status: Status;
   attempts: number;
   createdAt: Date;
+  // Not before this time. Equal to createdAt for an ordinary notification.
+  sendAt: Date;
 }
 
-export type NewNotification = Omit<Notification, "id" | "status" | "attempts" | "createdAt">;
+// `sendAt` null or missing means "now".
+export type NewNotification = Omit<Notification, "id" | "status" | "attempts" | "createdAt" | "sendAt"> & { sendAt?: Date | null };
 
 // What we remember about an Idempotency-Key.
 export interface IdempotencyRecord {
@@ -54,7 +57,10 @@ export interface NotificationRepository {
   // Keys belong to the client that sent them.
   findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null>;
   markPublished(ids: string[]): Promise<void>;
-  // Rows the broker never confirmed and that are old enough not to be a publish in flight.
+  // Rows that should be on a queue but are not:
+  //  - a scheduled notification (send_at after created_at) whose time has come: the API never
+  //    publishes these, so nothing can be in flight and it is published at once;
+  //  - an ordinary one the broker never confirmed, old enough not to be a publish still in flight.
   findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]>;
 
   // Atomically takes the right to send this notification for `leaseMs`. Of N concurrent
@@ -72,7 +78,7 @@ export interface NotificationRepository {
 }
 
 const COLUMNS = `id, request_id AS "requestId", user_id AS "userId", client_id AS "clientId", channel, platform,
-  destination, queue, payload, status, attempts, created_at AS "createdAt"`;
+  destination, queue, payload, status, attempts, created_at AS "createdAt", send_at AS "sendAt"`;
 
 export class PgNotificationRepository implements NotificationRepository {
   constructor(private readonly db: pg.Pool) {}
@@ -98,9 +104,9 @@ export class PgNotificationRepository implements NotificationRepository {
       const created: Notification[] = [];
       for (const r of rows) {
         const { rows: inserted } = await client.query(
-          `INSERT INTO notifications (request_id, user_id, client_id, channel, platform, destination, queue, payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${COLUMNS}`,
-          [r.requestId, r.userId, r.clientId, r.channel, r.platform, r.destination, r.queue, r.payload],
+          `INSERT INTO notifications (request_id, user_id, client_id, channel, platform, destination, queue, payload, send_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now())) RETURNING ${COLUMNS}`,
+          [r.requestId, r.userId, r.clientId, r.channel, r.platform, r.destination, r.queue, r.payload, r.sendAt ?? null],
         );
         created.push(inserted[0]);
       }
@@ -136,8 +142,10 @@ export class PgNotificationRepository implements NotificationRepository {
   async findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]> {
     const { rows } = await this.db.query(
       `SELECT ${COLUMNS} FROM notifications
-       WHERE published_at IS NULL AND created_at < now() - ($1 * interval '1 millisecond')
-       ORDER BY created_at LIMIT $2`,
+       WHERE published_at IS NULL
+         AND send_at <= now()
+         AND (send_at > created_at OR created_at < now() - ($1 * interval '1 millisecond'))
+       ORDER BY send_at LIMIT $2`,
       [olderThanMs, limit],
     );
     return rows;

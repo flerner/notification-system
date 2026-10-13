@@ -242,7 +242,42 @@ sequenceDiagram
 If Worker 1 had **not** crashed and was only slow, Worker 2 keeps getting `busy`. Once Worker 1
 records `SENT`, the next claim answers `done` and the duplicate message is acknowledged and dropped.
 
-## 8. Status of a notification
+## 8. A scheduled notification
+
+The API stores it and stops. The relay publishes it when its time comes, and from there it is an ordinary
+notification. Opt-out and rate limit are checked by the worker at send time, so a preference changed while
+it waited is respected.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant A as API
+    participant DB as Postgres
+    participant R as Relay (in the API)
+    participant MQ as RabbitMQ
+    participant W as Worker
+
+    C->>A: POST /v1/notifications with sendAt = tomorrow 09:00
+    A->>DB: store the notification with send_at (no queue message)
+    A-->>C: 202 Accepted, status PENDING, sendAt echoed
+    Note over DB: waits, unpublished
+    loop every few seconds
+        R->>DB: unpublished notifications whose send_at has passed
+    end
+    Note over R: tomorrow 09:00 has come
+    DB-->>R: the notification
+    R->>MQ: publish {notificationId}, wait for confirm
+    R->>DB: set published_at
+    MQ->>W: push {notificationId}
+    W->>DB: claim, then check opt-out and rate limit now
+    W->>W: send, as in diagram 3
+```
+
+A time in the past, or within a second of now, is not scheduled: it is sent at once. More than 30 days ahead is
+refused. Up to 100 due notifications are published per batch and the relay keeps going while batches are full.
+
+## 9. Status of a notification
 
 ```mermaid
 stateDiagram-v2

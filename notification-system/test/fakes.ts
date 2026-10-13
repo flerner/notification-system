@@ -83,6 +83,7 @@ export class InMemoryNotificationRepository implements NotificationRepository {
       status: "PENDING" as const,
       attempts: 0,
       createdAt: new Date(),
+      sendAt: r.sendAt ?? new Date(this.now()), // no time given means now, like the column default
       publishedAt: null,
     }));
     this.rows.push(...created);
@@ -99,9 +100,10 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     for (const r of this.rows) if (ids.includes(r.id)) r.publishedAt = new Date();
   }
 
-  // The fake ignores the age threshold: tests decide what is "old enough" by calling it.
+  // Like the real query, nothing is returned before its send time. The fake ignores the age
+  // threshold for ordinary rows: tests decide what is "old enough" by calling it.
   async findUnpublished(_olderThanMs: number, limit: number): Promise<Notification[]> {
-    return this.rows.filter((r) => r.publishedAt === null).slice(0, limit);
+    return this.rows.filter((r) => r.publishedAt === null && r.sendAt.getTime() <= this.now()).slice(0, limit);
   }
 
   async claim(id: string, leaseMs: number): Promise<ClaimResult> {

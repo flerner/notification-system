@@ -13,6 +13,7 @@
     "seed": "tsx scripts/seed.ts",
     "create-client": "tsx scripts/create-client.ts",
     "build-dashboard": "tsx scripts/build-dashboard.ts",
+    "demo:chaos": "tsx scripts/chaos-demo.ts",
     "dev:api": "tsx watch src/api/main.ts",
     "start:api": "node dist/api/main.js"
   },
