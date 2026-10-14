@@ -13,7 +13,7 @@ function parseBasic(header: string | undefined): { appKey: string; secret: strin
   return { appKey: decoded.slice(0, colon), secret: decoded.slice(colon + 1) };
 }
 
-// Only verified clients may use the API (book: appKey / appSecret). Every failure gets the same
+// Only verified clients may use the API (Book: Ch. 10, "Security in push notifications"). Every failure gets the same
 // answer, whether the header was missing, malformed, the key unknown, the secret wrong or the client
 // revoked, so a caller cannot use it to find out which keys exist. On success the client is put on
 // `res.locals.client` for the routes.

@@ -138,7 +138,7 @@ export class NotificationService {
 
   // Safety net for notifications that were stored but never reached the broker (crash between
   // the two steps, broker outage). Run periodically. May publish a message twice if two
-  // instances overlap; that is acceptable because consumers are idempotent (M5).
+  // instances overlap; that is acceptable because consumers are idempotent (see the claim in processor.ts).
   async relayUnpublished(
     olderThanMs: number,
     batchSize = 100,

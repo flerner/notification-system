@@ -2,9 +2,7 @@ import type pg from "pg";
 import { UserNotFoundError } from "../users/repository.js";
 import type { Channel } from "./queues.js";
 
-export const CHANNELS: readonly Channel[] = ["push", "sms", "email"];
-
-// The user's choice of which channels may reach them (book: notification settings).
+// The user's choice of which channels may reach them Book: Ch. 10, "Notification setting".
 // Deliberately NOT cached: this is consent. A stale cache entry would send to someone who has
 // just opted out, and a primary-key lookup is cheap at our volume.
 export interface SettingsRepository {

@@ -3,7 +3,6 @@ import { Registry } from "prom-client";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createRegistry, startMetricsServer } from "../src/infra/metrics.js";
-import { httpMetrics } from "../src/api/http-metrics.js";
 import type { Redis } from "ioredis";
 import { RedisCache } from "../src/infra/cache.js";
 import { NotificationMetrics } from "../src/notifications/metrics.js";

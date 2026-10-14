@@ -1,4 +1,4 @@
--- Clients: the services allowed to call the API (book: appKey / appSecret). The secret itself is
+-- Clients: the services allowed to call the API (Book: Ch. 10, "Security in push notifications"). The secret itself is
 -- never stored, only its hash.
 CREATE TABLE clients (
   app_key      text PRIMARY KEY,

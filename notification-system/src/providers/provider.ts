@@ -24,8 +24,8 @@ export class ProviderError extends Error {
 }
 
 // One implementation per third-party service (APNS, FCM, Twilio, SendGrid, ...). Workers only
-// know this interface, so a provider can be swapped or unplugged without touching them (book:
-// FCM is unavailable in China, so another push service is used there). send() resolves when
+// know this interface, so a provider can be swapped or unplugged without touching them.
+// Book: Ch. 10, "Third-party services". send() resolves when
 // the provider accepted the message and throws a ProviderError when it did not.
 export interface ChannelProvider {
   readonly name: string;

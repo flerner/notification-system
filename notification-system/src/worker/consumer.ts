@@ -62,7 +62,7 @@ export async function startWorker(
   }
 
   // Ack only AFTER the work is done. If we crash before that, the broker redelivers the message:
-  // at-least-once delivery, which is why processing must become idempotent (M5).
+  // at-least-once delivery, which is why processing has to be idempotent (see the claim in processor.ts).
   async function handle(msg: amqp.ConsumeMessage, queue: string): Promise<void> {
     let notificationId: string;
     try {

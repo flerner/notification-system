@@ -4,7 +4,7 @@
 groups:
   - name: notifications
     rules:
-      # The book: "if the problem persists, an alert will be sent out to developers."
+      # Book: Ch. 10, "Retry mechanism".
       - alert: DeadLetterQueueNotEmpty
         expr: sum(rabbitmq_queue_messages_ready{queue="dead-letter"}) > 0
         for: 1m
@@ -13,8 +13,7 @@ groups:
           summary: "Notifications were given up on (or a malformed message arrived)"
           description: "The dead-letter queue holds {{ $value }} message(s). See notifications with status FAILED in Postgres."
 
-      # The book: "a key metric to monitor is the total number of queued notifications. If the number
-      # is large, notification events are not processed fast enough by workers: more workers are needed."
+      # Book: Ch. 10, "Monitor queued notifications". A growing backlog means more workers are needed.
       - alert: QueueBacklogGrowing
         expr: |
           sum by (queue) (rabbitmq_queue_messages_ready{queue!~".*retry.*|dead-letter"}) > 100

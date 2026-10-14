@@ -32,7 +32,7 @@
       "id": 2,
       "type": "stat",
       "title": "Waiting in queues",
-      "description": "Messages waiting for a worker, across the main queues. The book's key metric: if it keeps growing, workers are too slow, so add workers.",
+      "description": "Messages waiting for a worker, across the main queues. If it keeps growing, workers are too slow, so add workers.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -557,7 +557,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "provider_circuit_state",
+          "expr": "max by (provider) (provider_circuit_state)",
           "legendFormat": "{{provider}}",
           "datasource": {
             "type": "prometheus",

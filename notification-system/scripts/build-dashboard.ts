@@ -45,7 +45,9 @@ function circuitTimeline(x: number, y: number, w: number) {
     id: nextId++, type: "state-timeline", title: "Provider circuit breakers", datasource: ds,
     description: "Closed is normal. Open means the provider is considered down: its notifications are held back and no attempts are used up. Half open is a trial after the cooldown.",
     gridPos: { h: 8, w, x, y },
-    targets: targets([["provider_circuit_state", "{{provider}}"]]),
+    // max over the workers: one row per provider, open if the breaker is open in ANY worker. Without it,
+    // every worker container (a scaled-out one, or a recreated one) draws its own set of rows.
+    targets: targets([["max by (provider) (provider_circuit_state)", "{{provider}}"]]),
     fieldConfig: {
       defaults: {
         mappings: [{ type: "value", options: { "0": { text: "closed", color: "green" }, "1": { text: "half open", color: "yellow" }, "2": { text: "open", color: "red" } } }],
@@ -65,7 +67,7 @@ const q = (p: number, metric: string, by: string) => `histogram_quantile(${p}, s
 // still measured and can be charted by adding a panel here: the metrics are in the code.
 const panels = [
   row("At a glance", 0),
-  stat("Waiting in queues", "Messages waiting for a worker, across the main queues. The book's key metric: if it keeps growing, workers are too slow, so add workers.", 0, 1, `sum(rabbitmq_queue_messages_ready{${MAIN}})`, [[null, "green"], [100, "yellow"], [1000, "red"]]),
+  stat("Waiting in queues", "Messages waiting for a worker, across the main queues. If it keeps growing, workers are too slow, so add workers.", 0, 1, `sum(rabbitmq_queue_messages_ready{${MAIN}})`, [[null, "green"], [100, "yellow"], [1000, "red"]]),
   stat("Dead-letter queue", "Notifications given up on, and messages that could not be read. Should be 0.", 6, 1, 'sum(rabbitmq_queue_messages_ready{queue="dead-letter"})', [[null, "green"], [1, "red"]]),
   stat("Failed for good (5 min)", "Given up on: a permanent error, or every attempt failed. Anything above 0 deserves a look.", 12, 1, "round(sum(increase(notifications_failed_total[5m])))", [[null, "green"], [1, "red"]]),
   stat("Workers listening", "The fewest workers serving any channel. 0 means some channel has nobody delivering it.", 18, 1, `min(sum by (queue) (rabbitmq_queue_consumers{${MAIN}}))`, [[null, "red"], [1, "green"]]),

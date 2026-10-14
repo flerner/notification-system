@@ -1,4 +1,4 @@
--- The notification log (book Fig. 10-11): every notification is persisted BEFORE it is queued,
+-- The notification log (Book: Fig. 10-11): every notification is persisted BEFORE it is queued,
 -- so a crash or a broker outage can never lose one. One row per destination: a push to a user
 -- with two devices is two rows, each retried and tracked on its own.
 CREATE TABLE notifications (

@@ -1,4 +1,4 @@
--- Contact info (book Fig. 10-8): email/phone on the user, device tokens in their own table
+-- Contact info (Book: Fig. 10-8): email/phone on the user, device tokens in their own table
 -- because one user can have many devices.
 CREATE TABLE users (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

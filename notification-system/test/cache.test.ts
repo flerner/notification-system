@@ -43,7 +43,13 @@ describe.skipIf(!url)("RedisCache (real Redis)", () => {
 
   it("a value expires after its time limit", async () => {
     await cache.set(key, "value", 1);
-    await new Promise((r) => setTimeout(r, 1200));
+    // Wait until Redis says the key is gone, instead of sleeping for a guessed time: Redis counts
+    // the time with its own clock (inside Docker), which can run a little differently from ours.
+    const end = Date.now() + 5000;
+    while ((await cache.get(key)) !== null) {
+      if (Date.now() > end) throw new Error("the value did not expire");
+      await new Promise((r) => setTimeout(r, 50));
+    }
     expect(await cache.get(key)).toBeNull();
   });
 });

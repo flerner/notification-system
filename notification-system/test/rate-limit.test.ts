@@ -85,7 +85,13 @@ describe.skipIf(!url)("RedisRateLimiter (real Redis)", () => {
     for (let i = 0; i < 3; i++) await l.allow(user, "email");
     expect(await l.allow(user, "email")).toBe(false);
 
-    await new Promise((r) => setTimeout(r, 1200));
+    // Wait until Redis has dropped the counter (it counts time with its own clock, inside Docker, which
+    // can run a little differently from ours) instead of sleeping for a guessed time.
+    const end = Date.now() + 5000;
+    while ((await redis.exists(`ratelimit:email:${user}`)) === 1) {
+      if (Date.now() > end) throw new Error("the counter did not expire");
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     expect(await l.allow(user, "email")).toBe(true);
   });

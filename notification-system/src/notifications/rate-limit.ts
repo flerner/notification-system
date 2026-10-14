@@ -17,7 +17,7 @@ export function parseRateLimit(spec: string): RateLimit {
   return { max: max!, windowSeconds: windowSeconds! };
 }
 
-// Frequency capping (book: users who get too many notifications turn them off completely).
+// Frequency capping: users who get too many notifications turn them off completely. Book: Ch. 10, "Rate limiting".
 export interface RateLimiter {
   // Takes one slot for this user and channel and says whether the notification may go out.
   allow(userId: string, channel: Channel): Promise<boolean>;
@@ -28,7 +28,7 @@ export interface RateLimiter {
 // disappears when it ends, and the count starts again. Cheap and easy to reason about. Known
 // weakness: a user can get up to twice the limit around a window boundary (the end of one window
 // plus the start of the next). Fine for an hourly "do not annoy people" cap; a sliding window or a
-// token bucket (book, chapter 4) would smooth that out at the price of more state.
+// token bucket (Book: Ch. 4) would smooth that out at the price of more state.
 //
 // One Lua script does INCR and EXPIRE together. Redis runs a script without interleaving other
 // commands, so (1) concurrent workers each get a distinct count, and exactly `max` of them are

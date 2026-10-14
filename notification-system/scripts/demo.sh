@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Dev-only demo of the flow as of M4: seed users, send notifications, let the workers deliver
-# them (mock providers), then look at the notification log in Postgres and at the RabbitMQ
-# queues. Run from notification-system/ with the stack up (`docker compose up -d`).
+# Dev-only quick tour: send a few notifications (and some that are refused), let the workers
+# deliver them (mock providers), then look at the notification log in Postgres and at the RabbitMQ
+# queues. For a long run with failures see `npm run demo:chaos`. Run from notification-system/ with the stack up (`docker compose up -d`).
 # Try it with several workers: `docker compose up -d --scale worker=3`.   Usage: ./scripts/demo.sh
 set -u
 J='content-type: application/json'

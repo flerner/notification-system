@@ -1,4 +1,4 @@
--- Notification templates (book: consistent format, fewer mistakes). One per name and channel, so
+-- Notification templates (Book: Ch. 10, "Notification template"). One per name and channel, so
 -- "order-shipped" can read differently as an email, an SMS and a push.
 CREATE TABLE templates (
   name        text NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE templates (
   PRIMARY KEY (name, channel)
 );
 
--- Notification settings (book): has the user opted in to this channel? No row means opted in.
+-- Notification settings (Book: Ch. 10, "Notification setting"): has the user opted in to this channel? No row means opted in.
 CREATE TABLE notification_settings (
   user_id     bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   channel     text NOT NULL CHECK (channel IN ('push', 'sms', 'email')),

@@ -199,7 +199,8 @@ export class NotificationProcessor {
   ): Promise<ProcessResult> {
     await this.notifications.markFailed(n.id, error);
     this.metrics.failed(n.channel, reason);
-    // An alert-level log: M10 turns these (and the dead-letter queue depth) into a Grafana alert.
+    // Logged at error level so that it stands out: the alert rules watch the failure rate and the
+    // dead-letter queue depth.
     this.log.error(
       {
         event: "notification_failed",
