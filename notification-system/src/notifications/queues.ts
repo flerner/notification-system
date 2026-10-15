@@ -2,12 +2,8 @@ import type { Platform } from "../users/repository.js";
 
 export type Channel = "push" | "sms" | "email";
 
-// One queue per channel (and per platform for push), so an outage of one third-party provider
-// backs up only its own queue and never blocks the others (Book: Fig. 10-10).
 export const QUEUES = ["push.ios", "push.android", "push.web", "sms", "email"] as const;
 
-// Where messages go when we give up on them (malformed, permanently failed, attempts exhausted).
-// It is a signal for operators: the notifications table is the source of truth.
 export const DEAD_LETTER_QUEUE = "dead-letter";
 
 export function queueFor(channel: Channel, platform: Platform | null): string {
@@ -28,8 +24,6 @@ export function retryQueueName(queue: string, delayMs: number): string {
   return `${queue}.retry.${delayMs}`;
 }
 
-// Every queue the system uses. Declared by every process that connects (declaring is idempotent),
-// so it does not matter which one starts first.
 export function allQueues(retryDelaysMs: readonly number[]): QueueSpec[] {
   return [
     ...QUEUES.map((name) => ({ name })),

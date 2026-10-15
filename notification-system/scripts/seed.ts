@@ -1,6 +1,3 @@
-// Dev-only: fills the database with a few users and devices so there is something to look at.
-// Safe to run repeatedly: existing rows are left alone, only missing ones are added.
-//   npm run seed          (needs `docker compose up -d`, talks to Postgres on localhost:5432)
 import pg from "pg";
 import { hashSecret } from "../src/clients/credentials.js";
 import { migrate } from "../src/infra/migrate.js";
@@ -10,7 +7,7 @@ const url = process.env.DATABASE_URL ?? "postgres://notif:notif@localhost:5432/n
 const users = [
   { email: "ana@example.com", phone: "+14155550101" },
   { email: "bob@example.com", phone: null },
-  { email: null, phone: "+14155550103" }, // reachable by SMS only
+  { email: null, phone: "+14155550103" },
 ];
 
 const devices = [
@@ -32,7 +29,7 @@ export const DEMO_SECRET = "demo-secret";
 
 const pool = new pg.Pool({ connectionString: url, max: 2 });
 try {
-  await migrate(pool, "migrations"); // so it also works on an empty database
+  await migrate(pool, "migrations");
   for (const u of users) {
     await pool.query("INSERT INTO users (email, phone) VALUES ($1, $2) ON CONFLICT DO NOTHING", [u.email, u.phone]);
   }

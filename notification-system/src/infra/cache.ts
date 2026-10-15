@@ -40,7 +40,6 @@ export class RedisCache implements Cache {
     try {
       await this.redis.del(key);
     } catch (err) {
-      // The entry may stay stale until its TTL runs out.
       this.log.warn({ err, key }, "cache invalidation failed");
       this.metrics.redisError("template_cache");
     }

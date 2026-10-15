@@ -9,9 +9,6 @@ import type { RateLimiter } from "./rate-limit.js";
 import type { SettingsRepository } from "./settings.js";
 import type { RetryPolicy } from "./retry.js";
 
-// "done":         nothing more to do with this message, acknowledge it.
-// "busy":         another worker holds the notification; try the message again soon.
-// "circuit_open": the provider is considered down; try the message again after a longer pause.
 export type ProcessResult = "done" | "busy" | "circuit_open";
 
 // Handles one queue message. Messages are delivered AT LEAST once (a crash before the ack makes
@@ -25,19 +22,6 @@ export type ProcessResult = "done" | "busy" | "circuit_open";
 //     a possible duplicate over a certain loss.
 //  3. The provider gets the notification id as idempotency key, so providers that honour it
 //     drop the repeated send.
-//
-// Before sending, a user who has opted out of the channel is skipped (SKIPPED_OPT_OUT, final), and
-// so is one who has already received their limit for the channel (SKIPPED_RATE_LIMITED, final).
-//
-// When delivery fails (a ProviderError, see GuardedProvider):
-//  - permanent error            -> FAILED now, nothing to retry.
-//  - retryable, attempts left   -> RETRYING, and the message goes to a retry queue that hands it
-//                                  back to the main queue after the backoff delay.
-//  - retryable, no attempts left-> FAILED.
-// FAILED rows are also announced on the dead-letter queue (best effort: the row is the truth).
-//
-// Only infrastructure errors (the database or broker is down) are thrown, so the consumer can
-// leave the message on the queue.
 export class NotificationProcessor {
   constructor(
     private readonly notifications: NotificationRepository,
@@ -47,14 +31,10 @@ export class NotificationProcessor {
     private readonly publisher: MessagePublisher,
     private readonly policy: RetryPolicy,
     private readonly log: Logger,
-    // Must be longer than the slowest provider call (the provider timeout), or a healthy worker
-    // loses its claim.
     private readonly leaseMs: number,
     private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
-  // `queue` is the queue this message came from; it tells us which provider is needed before we
-  // have loaded the notification.
   async process(notificationId: string, queue: string): Promise<ProcessResult> {
     const provider = this.providers[queue];
     if (!provider) throw new Error(`no provider configured for queue ${queue}`);
@@ -68,7 +48,6 @@ export class NotificationProcessor {
     const claim = await this.notifications.claim(notificationId, this.leaseMs);
     switch (claim.outcome) {
       case "missing":
-        // Rows are stored before they are queued, so this should not happen.
         this.log.warn(
           { notificationId },
           "queued notification not found, dropping",
@@ -87,9 +66,6 @@ export class NotificationProcessor {
 
     const n = claim.notification;
 
-    // Checked here, at the last moment before sending, and not when the request was accepted: the
-    // notification may have waited in a queue (or a retry queue) while the user opted out. Every
-    // attempt checks again.
     if (!(await this.settings.isOptedIn(n.userId, n.channel))) {
       await this.notifications.markSkipped(
         n.id,
@@ -173,7 +149,7 @@ export class NotificationProcessor {
     // case the error propagates, the original message goes back on the queue, and a worker claims
     // the notification again (sooner than the backoff, which is acceptable).
     const parked = await this.notifications.markRetrying(n.id, err.message);
-    if (!parked) return "done"; // someone else finished or took it over meanwhile
+    if (!parked) return "done";
     await this.publisher.publish(retryQueueName(n.queue, delay), {
       notificationId: n.id,
     });
@@ -199,8 +175,6 @@ export class NotificationProcessor {
   ): Promise<ProcessResult> {
     await this.notifications.markFailed(n.id, error);
     this.metrics.failed(n.channel, reason);
-    // Logged at error level so that it stands out: the alert rules watch the failure rate and the
-    // dead-letter queue depth.
     this.log.error(
       {
         event: "notification_failed",
@@ -221,7 +195,6 @@ export class NotificationProcessor {
         attempts: n.attempts,
       });
     } catch (err) {
-      // The row already says FAILED; failing to announce it must not make the worker redo the send.
       this.log.error(
         { err, notificationId: n.id },
         "could not publish to the dead-letter queue",

@@ -21,7 +21,6 @@ const params = z
   )
   .refine((p) => Object.keys(p).length <= 50, { message: "at most 50 params" });
 
-// Either ready-made text (`body`, optional `subject`) or a `template` with its `params`.
 const sendBody = z
   .object({
     userId: z.string().regex(/^\d+$/, "userId must be a number"),
@@ -30,8 +29,6 @@ const sendBody = z
     body: z.string().min(1).max(10_000).optional(),
     template: templateName.optional(),
     params: params.optional(),
-    // When to send, as an ISO 8601 time with its offset ("2026-11-01T09:00:00Z"). Missing or already
-    // past means now.
     sendAt: z.iso.datetime({ offset: true }).optional(),
   })
   .superRefine((b, ctx) => {
@@ -41,15 +38,11 @@ const sendBody = z
       issue("with a template, subject and body come from the template");
     }
     if (b.template === undefined && b.params !== undefined) issue("params only make sense with a template");
-    // A limit on how far ahead: a typo in the year should be an error, not a notification that
-    // sits in the table for a century.
     if (b.sendAt !== undefined && Date.parse(b.sendAt) > Date.now() + MAX_SCHEDULE_AHEAD_MS) {
       issue(`sendAt must be within ${MAX_SCHEDULE_AHEAD_DAYS} days from now`);
     }
   });
 
-// Chosen by the caller, one per logical notification request (e.g. an event id). Retrying the
-// request with the same key is safe.
 const idempotencyKey = z.string().min(1).max(255).optional();
 
 export function notificationRoutes(service: NotificationService): Router {
@@ -75,7 +68,6 @@ export function notificationRoutes(service: NotificationService): Router {
         key,
       );
       if (replayed) res.set("Idempotent-Replayed", "true");
-      // 202, not 201: the notification is stored and queued (or scheduled), not delivered yet.
       res.status(202).json({
         requestId,
         notifications: notifications.map((n) => ({

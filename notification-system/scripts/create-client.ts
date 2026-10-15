@@ -1,6 +1,3 @@
-// Creates a client (a service allowed to call the API) and prints its credentials. The secret is
-// shown only now: only its hash is stored, so it cannot be recovered later.
-//   npm run create-client -- billing-service
 import pg from "pg";
 import { generateCredentials, hashSecret } from "../src/clients/credentials.js";
 import { PgClientRepository } from "../src/clients/repository.js";

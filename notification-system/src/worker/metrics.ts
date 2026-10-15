@@ -3,8 +3,6 @@ import type { GuardedProvider } from "../providers/guarded.js";
 
 const STATE = { closed: 0, half_open: 1, open: 2 } as const;
 
-// The circuit state of every provider, read at the moment Prometheus scrapes: 0 closed, 1 half open,
-// 2 open. A gauge (a value that goes up and down) rather than a counter, because it is a state.
 export function registerCircuitGauge(registry: Registry, providers: Record<string, GuardedProvider>): void {
   new Gauge({
     name: "provider_circuit_state",

@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ClientRepository } from "./repository.js";
 
 export interface Client {
-  id: string; // the appKey
+  id: string;
   name: string;
 }
 
@@ -13,7 +13,6 @@ export function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
-// New credentials for a client. The secret is shown once, when created, and cannot be recovered.
 export function generateCredentials(): { appKey: string; secret: string } {
   return {
     appKey: `ak_${randomBytes(12).toString("hex")}`,
@@ -25,13 +24,10 @@ export function generateCredentials(): { appKey: string; secret: string } {
 // amount of work and cannot be told apart by timing.
 const NO_CLIENT_HASH = hashSecret("no such client");
 
-// Returns the client, or null for an unknown key, a wrong secret or a revoked client. The caller
-// must answer all three the same way: saying which one it was would help someone guess valid keys.
 export async function authenticate(clients: ClientRepository, appKey: string, secret: string): Promise<Client | null> {
   const record = await clients.findByKey(appKey);
   const expected = Buffer.from(record?.secretHash ?? NO_CLIENT_HASH, "hex");
   const given = Buffer.from(hashSecret(secret), "hex");
-  // timingSafeEqual does not stop at the first different byte, so it does not leak how much matched.
   const matches = given.length === expected.length && timingSafeEqual(given, expected);
   if (!record || !matches || record.revokedAt !== null) return null;
   return { id: record.appKey, name: record.name };

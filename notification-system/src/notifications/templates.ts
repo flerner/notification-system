@@ -15,7 +15,6 @@ export type Params = Record<string, string | number | boolean>;
 export class TemplateNotFoundError extends Error {}
 export class TemplateParamError extends Error {}
 
-// {{name}}, with optional spaces inside the braces. Names are letters, digits and underscores.
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 
 // Fills a template's placeholders. A missing parameter is an error (a half-filled message such as
@@ -78,10 +77,6 @@ function toTemplate(row: {
   };
 }
 
-// Cache-aside: read the cache; on a miss read the database and fill the cache. A write goes to the
-// database first and then drops the cached copy, so the next read loads the new version. If the
-// cache is unavailable, everything still works from the database (see Cache).
-// Not done on purpose: caching "not found" (a template created a moment later would stay invisible).
 export class CachedTemplateRepository implements TemplateRepository {
   constructor(
     private readonly inner: TemplateRepository,
@@ -99,11 +94,9 @@ export class CachedTemplateRepository implements TemplateRepository {
         this.metrics.templateCache("hit");
         return template;
       } catch {
-        // A corrupt entry is just a miss.
       }
     }
     this.metrics.templateCache("miss");
-    //postgre fallback
     const found = await this.inner.find(name, channel);
     if (found)
       await this.cache.set(key, JSON.stringify(found), this.ttlSeconds);

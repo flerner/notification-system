@@ -22,16 +22,10 @@ const logger = pino({ level: config.LOG_LEVEL });
 const registry = createRegistry();
 const metrics = new NotificationMetrics(registry);
 
-// Pool size is deliberate: Postgres defaults to max 100 connections total and we will run
-// several api/worker replicas, so each process takes a small, bounded slice.
 const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 2000 });
-// Fail fast when Redis is slow or unreachable: the cache is optional, so a command that cannot be
-// answered at once should fail (and fall back to the database) instead of waiting in a queue.
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 500 });
 const rabbit = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
 
-// Schema is applied before we accept traffic. Trade-off: a slow or failing migration delays
-// startup; the advisory lock in migrate() keeps concurrent replicas safe.
 await migrate(db, config.MIGRATIONS_DIR);
 
 const users = new PgUserRepository(db);
@@ -66,12 +60,10 @@ const stopRelay = startRelay(
   logger,
 );
 
-// Docker sends SIGTERM on stop; closing cleanly lets in-flight requests finish.
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
     stopRelay();
     metricsServer.close();
-    // Stop accepting connections; the callback fires once in-flight requests finish.
     await new Promise((resolve) => server.close(resolve));
     await rabbit.close();
     await db.end();

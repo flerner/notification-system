@@ -11,9 +11,6 @@ const body = z.object({
   body: z.string().min(1).max(10_000),
 });
 
-// Templates are created and edited by operators, e.g.:
-//   PUT /v1/templates/order-shipped/email  { "subject": "Order {{order_id}} shipped", "body": "Hi {{name}}, ..." }
-// Placeholders are {{name}}; callers supply the values as `params` when they send.
 export function templateRoutes(templates: TemplateRepository): Router {
   const router = Router();
 

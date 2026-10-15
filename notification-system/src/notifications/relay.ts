@@ -21,10 +21,6 @@ export async function drainRelay(
   return total;
 }
 
-// Runs drainRelay() on a timer. Two jobs: republish notifications the broker never confirmed (a
-// crash or an outage), and publish scheduled notifications when their time comes. So a scheduled
-// notification goes out within one interval after it is due. The `running` flag stops a slow run
-// from overlapping with the next tick. Returns a function that stops the timer (used on shutdown).
 export function startRelay(
   service: NotificationService,
   opts: { intervalMs: number; minAgeMs: number },

@@ -2,37 +2,25 @@ import amqp from "amqplib";
 import type { Logger } from "pino";
 import { z } from "zod";
 
-// What the consumer needs from the business logic.
 export interface MessageProcessor {
-  // "busy" (another worker holds the notification) and "circuit_open" (the provider is down) put
-  // the message back and retry it after a pause.
   process(notificationId: string, queue: string): Promise<"done" | "busy" | "circuit_open">;
 }
 
 export interface WorkerOptions {
   url: string;
   queues: readonly string[];
-  // Max unacknowledged messages per queue. This is the backpressure knob: the broker will not
-  // hand this worker more than N messages at once, so a slow provider cannot flood it.
   prefetch: number;
-  // Pause before putting a message back after an infrastructure error, so a down database
-  // does not turn into a tight redelivery loop.
   requeueDelayMs: number;
-  // Longer pause while a provider's circuit is open: nothing can succeed before it closes.
   circuitOpenDelayMs: number;
 }
 
 export interface RunningWorker {
-  // Stop taking messages, wait for the ones in progress, close the connection.
   stop(): Promise<void>;
-  // Resolves if the broker connection is lost without us calling stop().
   lost: Promise<void>;
 }
 
 const messageSchema = z.object({ notificationId: z.string().uuid() });
 
-// `deadLetter` receives messages we cannot process at all (they are acknowledged afterwards, so
-// they are kept somewhere instead of being lost or retried forever).
 export async function startWorker(
   opts: WorkerOptions,
   processor: MessageProcessor,
@@ -54,7 +42,7 @@ export async function startWorker(
   for (const queue of opts.queues) {
     await channel.assertQueue(queue, { durable: true });
     const { consumerTag } = await channel.consume(queue, (msg) => {
-      if (!msg) return; // the broker cancelled this consumer
+      if (!msg) return;
       const work = handle(msg, queue).finally(() => inFlight.delete(work));
       inFlight.add(work);
     });
@@ -68,8 +56,6 @@ export async function startWorker(
     try {
       notificationId = messageSchema.parse(JSON.parse(msg.content.toString())).notificationId;
     } catch (err) {
-      // A message we cannot understand will never become valid, so retrying is pointless. Keep it
-      // on the dead-letter queue for a human to look at, and only then acknowledge it.
       log.error({ err, queue }, "malformed message, sending to the dead-letter queue");
       try {
         await deadLetter({ reason: "malformed", queue, payload: msg.content.toString().slice(0, 2000) });

@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-// "20/3600" means 20 per 3600 seconds. Kept as a string here and parsed where it is used.
 const rateLimitSpec = (fallback: string) =>
   z.string().regex(/^[1-9]\d*\/[1-9]\d*$/, "must look like 20/3600 (max per window in seconds)").default(fallback);
 
@@ -12,15 +11,9 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   RABBITMQ_URL: z.string().url(),
-  // The relay republishes notifications the broker never confirmed. MIN_AGE keeps it away from
-  // publishes that are still in flight.
   RELAY_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   RELAY_MIN_AGE_MS: z.coerce.number().int().positive().default(10000),
-  // How long a template stays cached. An update invalidates it immediately; this is the worst case
-  // if that invalidation could not reach Redis.
   TEMPLATE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
-  // Worker only. WORKER_QUEUES lets one process serve a subset (e.g. only "sms") so channels can
-  // be scaled independently. Empty means all queues.
   WORKER_QUEUES: z.string().default("").transform((v) => v.split(",").map((q) => q.trim()).filter(Boolean)),
   WORKER_PREFETCH: z.coerce.number().int().positive().default(5),
   // How long a worker owns a notification it is sending. Must exceed the slowest provider call.
@@ -38,19 +31,13 @@ const schema = z.object({
   // A provider call that takes longer than this counts as a (retryable) failure. Keep it well below
   // CLAIM_LEASE_MS.
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
-  // Circuit breaker, per provider: open after this many consecutive transient failures, stay open
-  // for the cooldown.
   BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
   BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30000),
-  // Frequency cap per user and channel, as "max/windowSeconds": at most `max` notifications within
-  // `windowSeconds`. Counted by the worker when it is about to send (see rate-limit.ts).
   RATE_LIMIT_PUSH: rateLimitSpec("20/3600"),
   RATE_LIMIT_SMS: rateLimitSpec("5/3600"),
   RATE_LIMIT_EMAIL: rateLimitSpec("10/3600"),
-  // Mock providers: simulated delivery time and failure probability.
   MOCK_LATENCY_MS: z.coerce.number().int().nonnegative().default(50),
   MOCK_FAILURE_RATE: z.coerce.number().min(0).max(1).default(0),
-  // Where Prometheus scrapes this process (/metrics). Internal: not published outside Docker.
   METRICS_PORT: z.coerce.number().int().default(9464),
   MIGRATIONS_DIR: z.string().default("migrations"),
 });

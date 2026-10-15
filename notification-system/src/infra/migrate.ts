@@ -2,13 +2,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type pg from "pg";
 
-// Arbitrary constant: all processes that migrate take the same advisory lock.
 const MIGRATION_LOCK_ID = 727274;
 
-// Creates the database schema from the SQL files in `dir`: each file runs once, in filename
-// order, and is remembered in `schema_migrations`. Called at every api start, so a fresh
-// database gets its tables and a restart is a no-op. The advisory lock stops replicas
-// starting together from migrating twice. Returns the files applied by this call.
 export async function migrate(pool: pg.Pool, dir: string): Promise<string[]> {
   const client = await pool.connect();
   const applied: string[] = [];

@@ -1,7 +1,5 @@
 export interface BreakerOptions {
-  // Consecutive transient failures that open the circuit.
   failureThreshold: number;
-  // How long it stays open before calls are allowed again.
   cooldownMs: number;
 }
 
@@ -27,7 +25,6 @@ export class CircuitBreaker {
     return this.state === "open";
   }
 
-  // How long until calls are allowed again (0 when they already are).
   retryAfterMs(): number {
     return this.isOpen() ? this.opts.cooldownMs - (this.now() - this.openedAt!) : 0;
   }
@@ -39,9 +36,9 @@ export class CircuitBreaker {
 
   recordFailure(): void {
     const state = this.state;
-    if (state === "open") return; // a call that was already in flight when it opened
+    if (state === "open") return;
     if (state === "half_open") {
-      this.openedAt = this.now(); // the trial failed: back to open
+      this.openedAt = this.now();
       return;
     }
     if (++this.failures >= this.opts.failureThreshold) this.openedAt = this.now();

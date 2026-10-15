@@ -2,15 +2,9 @@ import type pg from "pg";
 import { UserNotFoundError } from "../users/repository.js";
 import type { Channel } from "./queues.js";
 
-// The user's choice of which channels may reach them Book: Ch. 10, "Notification setting".
-// Deliberately NOT cached: this is consent. A stale cache entry would send to someone who has
-// just opted out, and a primary-key lookup is cheap at our volume.
 export interface SettingsRepository {
-  // No row means the user never chose, which counts as opted in.
   isOptedIn(userId: string, channel: Channel): Promise<boolean>;
-  // Throws UserNotFoundError for an unknown user.
   setOptIn(userId: string, channel: Channel, optIn: boolean): Promise<void>;
-  // Every channel with its effective value, or null if the user does not exist.
   list(userId: string): Promise<Record<Channel, boolean> | null>;
 }
 

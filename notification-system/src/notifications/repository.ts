@@ -12,68 +12,56 @@ export interface Notification {
   id: string;
   requestId: string;
   userId: string;
-  clientId: string; // the client that asked for it
+  clientId: string;
   channel: Channel;
   platform: Platform | null;
-  destination: string; // email address, phone number or device token
+  destination: string;
   queue: string;
   payload: Payload;
   status: Status;
   attempts: number;
   createdAt: Date;
-  // Not before this time. Equal to createdAt for an ordinary notification.
   sendAt: Date;
 }
 
-// `sendAt` null or missing means "now".
-export type NewNotification = Omit<Notification, "id" | "status" | "attempts" | "createdAt" | "sendAt"> & { sendAt?: Date | null };
+export type NewNotification = Omit<
+  Notification,
+  "id" | "status" | "attempts" | "createdAt" | "sendAt"
+> & { sendAt?: Date | null };
 
-// What we remember about an Idempotency-Key.
 export interface IdempotencyRecord {
   requestId: string;
   requestHash: string;
   notifications: Notification[];
 }
 
-// Thrown by insertPending when the Idempotency-Key was already used (possibly a moment ago by a
-// concurrent request). The caller then looks the original up and replays it.
 export class DuplicateKeyError extends Error {}
 
-// Final statuses for notifications deliberately not sent.
 export type SkippedStatus = "SKIPPED_OPT_OUT" | "SKIPPED_RATE_LIMITED";
 
 export type ClaimResult =
   | { outcome: "claimed"; notification: Notification }
-  // Someone else is working on it and their lease has not expired: try again later.
   | { outcome: "busy" }
-  // Already SENT or FAILED: nothing left to do, the message can be dropped.
   | { outcome: "done" }
   | { outcome: "missing" };
 
 export interface NotificationRepository {
-  // Atomic: every destination of the request is stored or none is. With `idempotency`, the key
-  // is stored in the same transaction; throws DuplicateKeyError if it already exists.
-  insertPending(rows: NewNotification[], idempotency?: { key: string; hash: string }): Promise<Notification[]>;
-  // Keys belong to the client that sent them.
+  insertPending(
+    rows: NewNotification[],
+    idempotency?: { key: string; hash: string },
+  ): Promise<Notification[]>;
   findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null>;
   markPublished(ids: string[]): Promise<void>;
-  // Rows that should be on a queue but are not:
-  //  - a scheduled notification (send_at after created_at) whose time has come: the API never
-  //    publishes these, so nothing can be in flight and it is published at once;
-  //  - an ordinary one the broker never confirmed, old enough not to be a publish still in flight.
   findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]>;
 
-  // Atomically takes the right to send this notification for `leaseMs`. Of N concurrent
-  // callers, exactly one gets "claimed".
   claim(id: string, leaseMs: number): Promise<ClaimResult>;
-  // Return false when the notification was not in a state that allows the change.
   markSent(id: string): Promise<boolean>;
   markFailed(id: string, error: string): Promise<boolean>;
-  // The attempt ended without sending because of a rule, not an error (the user opted out, or has
-  // reached the rate limit).
-  // Final. `detail` says why and is kept in last_error.
-  markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean>;
-  // The delivery failed with a retryable error: park it until its retry message comes back.
+  markSkipped(
+    id: string,
+    status: SkippedStatus,
+    detail: string,
+  ): Promise<boolean>;
   markRetrying(id: string, error: string): Promise<boolean>;
 }
 
@@ -91,13 +79,15 @@ export class PgNotificationRepository implements NotificationRepository {
     try {
       await client.query("BEGIN");
       if (idempotency) {
-        // If a concurrent transaction is inserting the same key, this statement WAITS until it
-        // commits or rolls back, then either inserts (it rolled back) or does nothing (it won).
-        // That wait is what makes two simultaneous identical requests safe.
         const { rowCount } = await client.query(
           `INSERT INTO idempotency_keys (client_id, key, request_hash, request_id) VALUES ($1, $2, $3, $4)
            ON CONFLICT (client_id, key) DO NOTHING`,
-          [rows[0]!.clientId, idempotency.key, idempotency.hash, rows[0]!.requestId],
+          [
+            rows[0]!.clientId,
+            idempotency.key,
+            idempotency.hash,
+            rows[0]!.requestId,
+          ],
         );
         if (rowCount === 0) throw new DuplicateKeyError(idempotency.key);
       }
@@ -106,7 +96,17 @@ export class PgNotificationRepository implements NotificationRepository {
         const { rows: inserted } = await client.query(
           `INSERT INTO notifications (request_id, user_id, client_id, channel, platform, destination, queue, payload, send_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now())) RETURNING ${COLUMNS}`,
-          [r.requestId, r.userId, r.clientId, r.channel, r.platform, r.destination, r.queue, r.payload, r.sendAt ?? null],
+          [
+            r.requestId,
+            r.userId,
+            r.clientId,
+            r.channel,
+            r.platform,
+            r.destination,
+            r.queue,
+            r.payload,
+            r.sendAt ?? null,
+          ],
         );
         created.push(inserted[0]);
       }
@@ -120,7 +120,10 @@ export class PgNotificationRepository implements NotificationRepository {
     }
   }
 
-  async findByKey(clientId: string, key: string): Promise<IdempotencyRecord | null> {
+  async findByKey(
+    clientId: string,
+    key: string,
+  ): Promise<IdempotencyRecord | null> {
     const { rows } = await this.db.query(
       `SELECT request_id AS "requestId", request_hash AS "requestHash" FROM idempotency_keys
        WHERE client_id = $1 AND key = $2`,
@@ -136,10 +139,16 @@ export class PgNotificationRepository implements NotificationRepository {
 
   async markPublished(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    await this.db.query("UPDATE notifications SET published_at = now() WHERE id = ANY($1::uuid[])", [ids]);
+    await this.db.query(
+      "UPDATE notifications SET published_at = now() WHERE id = ANY($1::uuid[])",
+      [ids],
+    );
   }
 
-  async findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]> {
+  async findUnpublished(
+    olderThanMs: number,
+    limit: number,
+  ): Promise<Notification[]> {
     const { rows } = await this.db.query(
       `SELECT ${COLUMNS} FROM notifications
        WHERE published_at IS NULL
@@ -164,8 +173,10 @@ export class PgNotificationRepository implements NotificationRepository {
     );
     if (rows.length === 1) return { outcome: "claimed", notification: rows[0] };
 
-    // Not claimed: find out why, so the caller knows whether to wait or to drop the message.
-    const { rows: current } = await this.db.query("SELECT status FROM notifications WHERE id = $1", [id]);
+    const { rows: current } = await this.db.query(
+      "SELECT status FROM notifications WHERE id = $1",
+      [id],
+    );
     if (current.length === 0) return { outcome: "missing" };
     return { outcome: isTerminal(current[0].status) ? "done" : "busy" };
   }
@@ -179,7 +190,11 @@ export class PgNotificationRepository implements NotificationRepository {
     return rowCount === 1;
   }
 
-  async markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean> {
+  async markSkipped(
+    id: string,
+    status: SkippedStatus,
+    detail: string,
+  ): Promise<boolean> {
     const { rowCount } = await this.db.query(
       "UPDATE notifications SET status = $2, last_error = $3, lease_expires_at = NULL WHERE id = $1 AND status = ANY($4)",
       [id, status, detail, predecessors(status)],

@@ -9,8 +9,6 @@ const channel = z.enum(["push", "sms", "email"]);
 export function settingsRoutes(settings: SettingsRepository): Router {
   const router = Router();
 
-  // Opt in or out of one channel. Takes effect for notifications not yet sent, including ones
-  // already queued: the worker checks again right before sending.
   router.put("/users/:id/settings/:channel", async (req, res) => {
     const params = z.object({ id: userId, channel }).parse(req.params);
     const { optIn } = z.object({ optIn: z.boolean() }).parse(req.body);

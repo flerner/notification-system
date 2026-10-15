@@ -2,13 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import { DuplicateContactError, UserNotFoundError, type UserRepository } from "../users/repository.js";
 
-// E.164: "+" then up to 15 digits, first digit non-zero. Rejects local formats on purpose,
-// because SMS providers need the country code.
 const phone = z.string().regex(/^\+[1-9]\d{1,14}$/, "phone must be in E.164 format, e.g. +14155550123");
 
 const createUserBody = z
   .object({
-    // Lowercased so "A@x.com" and "a@x.com" can't be registered as two users.
     email: z.string().email().toLowerCase().optional(),
     phone: phone.optional(),
   })
@@ -43,7 +40,6 @@ export function userRoutes(users: UserRepository): Router {
     const { id } = userIdParam.parse(req.params);
     const body = registerDeviceBody.parse(req.body);
     try {
-      // 200 rather than 201: this is an upsert, so we don't claim a new resource was created.
       res.status(200).json(await users.registerDevice({ userId: id, ...body }));
     } catch (err) {
       if (err instanceof UserNotFoundError) {

@@ -10,9 +10,6 @@ export interface ProvidersOptions {
   breaker: BreakerOptions;
 }
 
-// Which provider serves which queue, each with its own circuit breaker (one provider being down
-// must not stop the others). To use a real service, replace the entry with a class that
-// implements ChannelProvider; nothing else changes.
 export function buildProviders(opts: ProvidersOptions): Record<string, GuardedProvider> {
   const mock = (name: string): ChannelProvider => new MockProvider(name, opts);
   const guard = (provider: ChannelProvider) => new GuardedProvider(provider, new CircuitBreaker(opts.breaker), opts.timeoutMs);

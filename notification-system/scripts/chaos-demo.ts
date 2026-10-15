@@ -1,13 +1,3 @@
-// A scripted demonstration of the system under load and under failure, to run while watching the
-// Grafana dashboard (http://localhost:3001). It applies steady load, then a spike, then breaks one
-// thing at a time (a worker, RabbitMQ, Redis, the provider), and at the end checks the one thing that
-// matters: every notification the API accepted reached a final status. Nothing was lost.
-//
-//   npm run demo:chaos                   about 5 minutes, one worker
-//   npm run demo:chaos -- --workers 3    three workers: one of them is killed, and the run also checks
-//                                        that no notification was sent twice by workers racing
-//   npm run demo:chaos -- --scale 0.4    the same phases, shorter (for a quick check)
-//
 // It EMPTIES the notifications table, the rate-limit counters and the queues, and it recreates the api
 // and worker containers (with short retry delays and high rate limits so the demo is visible). When it
 // finishes, or is interrupted, it puts the stack back as `docker compose up` would start it.
@@ -21,7 +11,6 @@ const API = "http://localhost:3000";
 const AUTH = `Basic ${Buffer.from("demo-key:demo-secret").toString("base64")}`;
 const DB_URL = process.env.DATABASE_URL ?? "postgres://notif:notif@localhost:5432/notifications";
 
-// ---------- command line ----------
 const scaleArg = process.argv.indexOf("--scale");
 const SCALE = scaleArg >= 0 ? Number(process.argv[scaleArg + 1]) : 1;
 if (!(SCALE > 0 && SCALE <= 5)) throw new Error("--scale must be a number between 0 and 5");
@@ -30,7 +19,6 @@ const WORKERS = workersArg >= 0 ? Number(process.argv[workersArg + 1]) : 1;
 if (!Number.isInteger(WORKERS) || WORKERS < 1 || WORKERS > 8) throw new Error("--workers must be a whole number from 1 to 8");
 const seconds = (s: number) => Math.max(3, Math.round(s * SCALE)) * 1000;
 
-// ---------- small helpers ----------
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const started = Date.now();
 const say = (msg: string) => console.log(`[${String(Math.round((Date.now() - started) / 1000)).padStart(3)}s] ${msg}`);
@@ -44,16 +32,12 @@ async function compose(args: string[], env: Record<string, string> = {}): Promis
   return stdout;
 }
 
-// Short retry delays so retries happen within seconds, and no rate limit getting in the way. The api
-// declares the retry queues too, so both services get the same RETRY_DELAYS_MS.
 const DEMO_ENV = {
   RETRY_DELAYS_MS: "2000,5000",
   RATE_LIMIT_PUSH: "100000/60",
   RATE_LIMIT_SMS: "100000/60",
   RATE_LIMIT_EMAIL: "100000/60",
 };
-// Recreating a container throws away its logs, so the worker's are kept here first. Stopping and
-// starting a container (phase 3) keeps them, so only a recreate needs this.
 const archivedWorkerLogs: string[] = [];
 async function recreateWorker(extra: Record<string, string> = {}, archiveFirst = true) {
   if (archiveFirst) archivedWorkerLogs.push(await compose(["logs", "--no-log-prefix", "worker"]).catch(() => ""));
@@ -66,22 +50,18 @@ async function waitHealthy(timeoutMs = 90_000): Promise<void> {
     try {
       if ((await fetch(`${API}/health`, { signal: AbortSignal.timeout(2000) })).ok) return;
     } catch {
-      // not up yet
     }
     await sleep(1000);
   }
   throw new Error("the api did not become healthy");
 }
 
-// ---------- the load generator ----------
-// Behaves like a well-written caller: every request has an Idempotency-Key, and a request that gets no
-// answer is retried with the same key, so a retry can never create a second notification.
 type Tally = {
   logicalRequests: number;
-  accepted: number; // got a 202 in the end
-  neverAccepted: number; // no 202 even after retries
-  notificationsReported: number; // what the 202 answers said was stored (counted once per request)
-  repeatsRecognised: number; // a second send of the same request answered as a replay
+  accepted: number;
+  neverAccepted: number;
+  notificationsReported: number;
+  repeatsRecognised: number;
   http5xx: number;
   networkErrors: number;
   retriesByCaller: number;
@@ -156,7 +136,6 @@ class Load {
           const json = (await res.json()) as { notifications: unknown[] };
           t.accepted++;
           t.notificationsReported += json.notifications.length;
-          // One request in ten is sent twice, as a caller does when it is unsure the first arrived.
           if (Math.random() < 0.1) {
             const again = await this.post(body, key).catch(() => undefined);
             if (again?.status === 202 && again.headers.get("idempotent-replayed") === "true") t.repeatsRecognised++;
@@ -164,7 +143,7 @@ class Load {
           return;
         }
         if (res.status >= 500) t.http5xx++;
-        else return void t.neverAccepted++; // a 4xx would be a bug in this script: do not retry it
+        else return void t.neverAccepted++;
       } catch {
         t.networkErrors++;
       }
@@ -175,7 +154,6 @@ class Load {
   }
 }
 
-// ---------- checks and report ----------
 async function purgeQueues() {
   const names = (await compose(["exec", "-T", "rabbitmq", "rabbitmqctl", "list_queues", "name", "--quiet"]))
     .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("name") && !l.startsWith("Timeout") && !l.startsWith("Listing"));
@@ -205,8 +183,6 @@ async function peakBacklog(runSeconds: number): Promise<number | undefined> {
   }
 }
 
-// Every log line of the run: the api and the worker containers as they are now, plus the worker logs
-// archived before each recreate.
 async function runLogLines(since: Date): Promise<{ level?: number; msg?: string; notificationId?: string; hostname?: string }[]> {
   const current = await compose(["logs", "--no-log-prefix", "--since", since.toISOString(), "api", "worker"]).catch(() => "");
   const lines: { level?: number; msg?: string; notificationId?: string; hostname?: string }[] = [];
@@ -214,14 +190,11 @@ async function runLogLines(since: Date): Promise<{ level?: number; msg?: string;
     try {
       lines.push(JSON.parse(line));
     } catch {
-      // not a JSON log line
     }
   }
   return lines;
 }
 
-// Error-level log lines by message. Most are expected here (we broke things on purpose); an unexpected
-// one is the thing to look at.
 function errorLogs(lines: { level?: number; msg?: string }[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const j of lines) {
@@ -248,8 +221,6 @@ async function repeatedSends(db: pg.Pool, lines: { msg?: string; notificationId?
   return { racing, afterCrash: rows.length - racing };
 }
 
-// How the sends were shared between the worker containers (shown after the spike, to prove the work is
-// really split). The container id is the "hostname" in each log line.
 async function workShare(): Promise<string> {
   const out = await compose(["logs", "--no-log-prefix", "worker"]).catch(() => "");
   const counts: Record<string, number> = {};
@@ -258,7 +229,6 @@ async function workShare(): Promise<string> {
       const j = JSON.parse(line) as { msg?: string; hostname?: string };
       if (j.msg === "notification sent" && j.hostname) counts[j.hostname.slice(0, 6)] = (counts[j.hostname.slice(0, 6)] ?? 0) + 1;
     } catch {
-      // not a JSON log line
     }
   }
   return Object.entries(counts).map(([worker, n]) => `${worker}: ${n}`).join(", ") || "(none yet)";
@@ -266,7 +236,6 @@ async function workShare(): Promise<string> {
 
 const mark = (ok: boolean) => (ok ? "PASS" : "FAIL");
 
-// ---------- the demonstration ----------
 async function restoreStack() {
   say("putting the stack back to its normal settings");
   await compose(["start", "rabbitmq", "redis"]).catch(() => "");
@@ -293,7 +262,6 @@ async function main() {
 
   const load = new Load();
   try {
-    // ----- preparation -----
     say("preparing: clean state, demo settings, seed data");
     await compose(["up", "-d", "--force-recreate", "--no-deps", "api"], DEMO_ENV);
     await recreateWorker({}, false);
@@ -302,7 +270,6 @@ async function main() {
     await db.query("TRUNCATE notifications, idempotency_keys");
     await compose(["exec", "-T", "redis", "redis-cli", "eval", "for _,k in ipairs(redis.call('keys','ratelimit:*')) do redis.call('del',k) end", "0"]);
     await purgeQueues();
-    // One of Bob's devices has an invalid token, so some pushes fail for good and reach the dead-letter queue.
     await fetch(`${API}/users/2/devices`, {
       method: "POST",
       headers: { authorization: AUTH, "content-type": "application/json" },
@@ -311,19 +278,16 @@ async function main() {
     const runStart = new Date();
     load.start();
 
-    // ----- 1 -----
     banner("1. Steady load (4 requests per second)", "Accepted vs sent follow each other; Waiting in queues stays near 0; p95 stays low");
     load.setRate(4);
     await sleep(seconds(30));
 
-    // ----- 2 -----
     banner("2. A spike (15 requests per second)", "Accepted jumps; Waiting for a worker may rise for a moment, then falls as the worker keeps up");
     load.setRate(15);
     await sleep(seconds(30));
     load.setRate(4);
     if (WORKERS > 1) say(`sends shared between the ${WORKERS} workers so far: ${await workShare()}`);
 
-    // ----- 3 -----
     if (WORKERS === 1) {
       banner("3. The only worker dies (and comes back)", "Workers listening turns red (0); Waiting in queues climbs; after the restart it drains to 0");
       await sleep(seconds(8));
@@ -348,7 +312,6 @@ async function main() {
       await sleep(seconds(18));
     }
 
-    // ----- 4 -----
     banner("4. RabbitMQ goes down", "the API still answers 202 (stored, not queued yet); Workers listening drops; after the restart the relay queues what was stored");
     say("stopping RabbitMQ");
     await compose(["stop", "rabbitmq"]);
@@ -357,7 +320,6 @@ async function main() {
     await compose(["start", "rabbitmq"]);
     await sleep(seconds(25));
 
-    // ----- 5 -----
     banner("5. Redis goes down", "nothing visible should change: templates come from Postgres and the rate limiter lets notifications through");
     say("stopping Redis");
     await compose(["stop", "redis"]);
@@ -366,7 +328,6 @@ async function main() {
     await compose(["start", "redis"]);
     await sleep(seconds(10));
 
-    // ----- 6 -----
     banner("6. A flaky provider (half of the sends fail)", "retries appear in What becomes of notifications; p95 rises; some notifications fail for good and reach the dead-letter queue");
     await recreateWorker({ MOCK_FAILURE_RATE: "0.5" });
     await sleep(seconds(30));
@@ -374,7 +335,6 @@ async function main() {
     await recreateWorker();
     await sleep(seconds(15));
 
-    // ----- 7 -----
     banner("7. The provider is completely down", "Provider circuit breakers turns red; notifications wait without using their attempts; after recovery they flow");
     await recreateWorker({ MOCK_FAILURE_RATE: "1", BREAKER_FAILURE_THRESHOLD: "3", BREAKER_COOLDOWN_MS: "15000" });
     await sleep(seconds(20));
@@ -382,7 +342,6 @@ async function main() {
     await recreateWorker();
     await sleep(seconds(10));
 
-    // ----- settle -----
     banner("8. Load stops; waiting for everything to finish", "Waiting in queues returns to 0; retrying notifications reach a final state");
     load.setRate(0);
     await load.stop();
@@ -396,7 +355,6 @@ async function main() {
       left = await unfinished();
     }
 
-    // ----- report -----
     const t = load.tally;
     const rows = (await db.query("SELECT count(*)::int AS n FROM notifications")).rows[0].n as number;
     const byStatus = (await db.query("SELECT status, count(*)::int AS n FROM notifications GROUP BY 1 ORDER BY 1")).rows as { status: string; n: number }[];

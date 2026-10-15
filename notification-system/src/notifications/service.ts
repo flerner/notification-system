@@ -14,24 +14,18 @@ import { NotificationMetrics } from "./metrics.js";
 import { queueFor, type Channel } from "./queues.js";
 import { render, TemplateNotFoundError, type Params, type TemplateRepository } from "./templates.js";
 
-// A time this close to now is not worth deferring: the relay only runs every few seconds, so
-// holding the notification would make it later than asked, not earlier.
 const IMMEDIATE_WINDOW_MS = 1000;
 
-// The user exists but has nothing to deliver to on this channel (no phone, no devices, ...).
 export class NoDestinationError extends Error {}
 export class UnknownUserError extends Error {}
-// The same Idempotency-Key was sent with a different request: a bug on the caller's side.
 export class IdempotencyKeyReuseError extends Error {}
 
-// What the caller wants to say: ready-made text, or a template to fill in.
 export type Content =
   | { kind: "text"; subject?: string; body: string }
   | { kind: "template"; name: string; params: Params };
 
 export interface SendRequest {
-  clientId: string; // the authenticated client making the request
-  // Do not send before this time. Missing, past or within a second from now: send now.
+  clientId: string;
   sendAt?: Date;
   userId: string;
   channel: Channel;
@@ -41,7 +35,6 @@ export interface SendRequest {
 export interface SendResult {
   requestId: string;
   notifications: Notification[];
-  // True when this call returned the result of an earlier call with the same Idempotency-Key.
   replayed: boolean;
 }
 
@@ -57,11 +50,6 @@ export class NotificationService {
 
   // Persist first, publish second. Once the rows are stored the request is accepted: even if
   // RabbitMQ is down right now, relayUnpublished() will deliver them to the queue later.
-  //
-  // With an idempotencyKey, calling this again with the same key and the same request does not
-  // create anything new: it returns the original result (replayed = true). The key is checked
-  // first, so a replay still works if the user's contacts changed, or the template was edited or
-  // deleted, in the meantime.
   async send(req: SendRequest, idempotencyKey?: string): Promise<SendResult> {
     const hash = requestHash(req);
     if (idempotencyKey) {
@@ -112,7 +100,6 @@ export class NotificationService {
       throw err;
     }
     this.metrics.accepted(req.channel, notifications.length);
-    // A scheduled notification is stored and nothing more: the relay publishes it once it is due.
     if (!deferred) await this.publish(notifications);
     return { requestId, notifications, replayed: false };
   }
@@ -132,7 +119,6 @@ export class NotificationService {
       throw new IdempotencyKeyReuseError("Idempotency-Key was already used with a different request");
     }
     this.metrics.replayed();
-    // Not published again: if the original publish failed, the relay takes care of it.
     return { requestId: existing.requestId, notifications: existing.notifications, replayed: true };
   }
 
@@ -150,8 +136,6 @@ export class NotificationService {
     return this.publish(stuck);
   }
 
-  // Returns how many were confirmed by the broker. Never throws for a broker failure: the rows
-  // simply stay unpublished and the relay retries them.
   private async publish(notifications: Notification[]): Promise<number> {
     const results = await Promise.allSettled(
       notifications.map((n) =>
@@ -171,7 +155,6 @@ export class NotificationService {
     try {
       await this.notifications.markPublished(published);
     } catch (err) {
-      // Worst case the relay publishes these again; duplicates are harmless.
       this.log.error({ err }, "could not mark notifications as published");
     }
     return published.length;
@@ -207,7 +190,6 @@ function requestHash(req: SendRequest): string {
     c.kind === "text"
       ? ["text", c.subject ?? null, c.body]
       : ["template", c.name, Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b))];
-  // The time asked for is part of the request: the same key with another time is another request.
   return createHash("sha256")
     .update(JSON.stringify([req.userId, req.channel, content, req.sendAt?.getTime() ?? null]))
     .digest("hex");

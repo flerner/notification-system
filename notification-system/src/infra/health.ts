@@ -1,6 +1,5 @@
 import { withTimeout } from "./timeout.js";
 
-// A dependency check is just a name plus a function that throws when the dependency is unhealthy.
 export interface HealthCheck {
   name: string;
   check: () => Promise<void>;
@@ -11,8 +10,6 @@ export type HealthReport = {
   checks: Record<string, "up" | "down">;
 };
 
-// Every check gets its own timeout: a hung dependency must make /health report "down"
-// quickly, not hang the health endpoint (and with it the container healthcheck).
 export async function runHealthChecks(checks: HealthCheck[], timeoutMs = 2000): Promise<HealthReport> {
   const results = await Promise.all(
     checks.map(async ({ name, check }) => {

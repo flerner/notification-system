@@ -16,7 +16,6 @@ import { settingsRoutes } from "./settings.js";
 import { templateRoutes } from "./templates.js";
 import { userRoutes } from "./users.js";
 
-// Built from injected pieces so tests can create an app without real Postgres/Redis/RabbitMQ.
 export function buildServer(opts: {
   logger: Logger;
   healthChecks: HealthCheck[];
@@ -25,7 +24,7 @@ export function buildServer(opts: {
   settings: SettingsRepository;
   templates: TemplateRepository;
   clients: ClientRepository;
-  registry?: Registry; // where request metrics go; none in tests that do not look at them
+  registry?: Registry;
 }) {
   const app = express();
 
@@ -42,19 +41,15 @@ export function buildServer(opts: {
 
   if (opts.registry) app.use(httpMetrics(opts.registry));
 
-  // Liveness: the process is up. Used by nothing that should restart us on a dependency outage.
   app.get("/live", (_req, res) => {
     res.json({ ok: true });
   });
 
-  // Readiness: can we actually serve traffic? 503 tells load balancers to stop routing to us.
   app.get("/health", async (_req, res) => {
     const report = await runHealthChecks(opts.healthChecks);
     res.status(report.ok ? 200 : 503).json(report);
   });
 
-  // Everything below needs a verified client. This comes before the body is parsed, so a caller with
-  // no credentials gets a 401 and costs us nothing more.
   app.use(requireClient(opts.clients));
   app.use(express.json({ limit: "100kb" }));
 
@@ -70,13 +65,12 @@ export function buildServer(opts: {
       res.status(400).json({ error: "validation failed", issues: err.issues });
       return;
     }
-    // e.g. malformed JSON from express.json(): the caller's fault, so pass its 4xx through.
     if (typeof err.status === "number" && err.status >= 400 && err.status < 500) {
       res.status(err.status).json({ error: err.message });
       return;
     }
     req.log.error({ err }, "unhandled error");
-    res.status(500).json({ error: "internal error" }); // don't leak internals
+    res.status(500).json({ error: "internal error" });
   };
   app.use(onError);
 

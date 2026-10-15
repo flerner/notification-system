@@ -7,13 +7,10 @@ export interface DeliveryRequest {
   // "sent but we crashed before recording it" window; it cannot close it for providers that
   // have no such key.
   idempotencyKey: string;
-  destination: string; // email address, phone number or device token
+  destination: string;
   payload: Payload;
 }
 
-// What a provider throws when it cannot deliver. `retryable` tells the worker what to do next:
-//  - true:  the problem is probably temporary (timeout, 5xx, rate limit, network): try again later.
-//  - false: retrying can never help (invalid device token, malformed address): give up now.
 export class ProviderError extends Error {
   constructor(
     message: string,
@@ -23,10 +20,6 @@ export class ProviderError extends Error {
   }
 }
 
-// One implementation per third-party service (APNS, FCM, Twilio, SendGrid, ...). Workers only
-// know this interface, so a provider can be swapped or unplugged without touching them.
-// Book: Ch. 10, "Third-party services". send() resolves when
-// the provider accepted the message and throws a ProviderError when it did not.
 export interface ChannelProvider {
   readonly name: string;
   send(req: DeliveryRequest): Promise<void>;

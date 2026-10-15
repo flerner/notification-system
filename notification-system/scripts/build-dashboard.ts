@@ -1,7 +1,3 @@
-// Generates observability/grafana/dashboards/notifications.json, the dashboard Grafana loads on
-// start-up. The JSON is committed, so `docker compose up` needs no build step; run
-// `npm run build-dashboard` after changing this file. Keeping it as code means the dashboard can be
-// reviewed, diffed and edited without a 1000-line JSON file.
 import { writeFileSync } from "node:fs";
 
 const ds = { type: "prometheus", uid: "prometheus" };
@@ -62,9 +58,6 @@ function circuitTimeline(x: number, y: number, w: number) {
 const MAIN = 'queue!~".*retry.*|dead-letter"';
 const q = (p: number, metric: string, by: string) => `histogram_quantile(${p}, sum by (le, ${by}) (rate(${metric}_bucket[5m])))`;
 
-// Four questions, nine panels. Is it keeping up? Is anything being given up on? Is it fast enough?
-// What is the traffic doing? More detail (provider times, cache hit ratio, API latency, memory) is
-// still measured and can be charted by adding a panel here: the metrics are in the code.
 const panels = [
   row("At a glance", 0),
   stat("Waiting in queues", "Messages waiting for a worker, across the main queues. If it keeps growing, workers are too slow, so add workers.", 0, 1, `sum(rabbitmq_queue_messages_ready{${MAIN}})`, [[null, "green"], [100, "yellow"], [1000, "red"]]),

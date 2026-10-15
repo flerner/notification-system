@@ -1,11 +1,5 @@
 import { Counter, Histogram, Registry } from "prom-client";
 
-// What the notification pipeline reports about itself. Labels are few and fixed (channel, reason,
-// provider): a label that can take many values (a user id, a notification id, a URL) would create a
-// new time series for each and overload Prometheus. Detail about one notification belongs in the
-// database and the logs; metrics answer "how much, how fast, how often".
-// The API and the worker each create their own copy; a counter only appears once it has been used.
-// Without a registry argument it is isolated, which is what the tests use.
 export class NotificationMetrics {
   private readonly acceptedTotal: Counter<"channel">;
   private readonly deduplicatedTotal: Counter<"layer">;

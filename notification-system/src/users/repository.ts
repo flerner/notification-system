@@ -3,7 +3,7 @@ import type pg from "pg";
 export type Platform = "ios" | "android" | "web";
 
 export interface User {
-  id: string; // bigint comes back from Postgres as a string; we keep it a string end to end
+  id: string;
   email: string | null;
   phone: string | null;
 }
@@ -15,9 +15,7 @@ export interface Device {
   token: string;
 }
 
-// Thrown when the email or phone already belongs to another user.
 export class DuplicateContactError extends Error {}
-// Thrown when registering a device for a user that does not exist.
 export class UserNotFoundError extends Error {}
 
 export interface Contacts {
@@ -26,14 +24,11 @@ export interface Contacts {
 }
 
 export interface UserRepository {
-  // Everything we can reach this user with, or null if the user does not exist.
   findContacts(userId: string): Promise<Contacts | null>;
   createUser(input: { email?: string; phone?: string }): Promise<User>;
-  // Idempotent: registering the same token again updates the existing row.
   registerDevice(input: { userId: string; platform: Platform; token: string }): Promise<Device>;
 }
 
-// Postgres error codes we translate into domain errors.
 const UNIQUE_VIOLATION = "23505";
 const FOREIGN_KEY_VIOLATION = "23503";
 
