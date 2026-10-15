@@ -12,7 +12,12 @@ import {
 } from "./repository.js";
 import { NotificationMetrics } from "./metrics.js";
 import { queueFor, type Channel } from "./queues.js";
-import { render, TemplateNotFoundError, type Params, type TemplateRepository } from "./templates.js";
+import {
+  render,
+  TemplateNotFoundError,
+  type Params,
+  type TemplateRepository,
+} from "./templates.js";
 
 const IMMEDIATE_WINDOW_MS = 1000;
 
@@ -48,12 +53,13 @@ export class NotificationService {
     private readonly metrics: NotificationMetrics = new NotificationMetrics(),
   ) {}
 
-  // Persist first, publish second. Once the rows are stored the request is accepted: even if
-  // RabbitMQ is down right now, relayUnpublished() will deliver them to the queue later.
   async send(req: SendRequest, idempotencyKey?: string): Promise<SendResult> {
     const hash = requestHash(req);
     if (idempotencyKey) {
-      const existing = await this.notifications.findByKey(req.clientId, idempotencyKey);
+      const existing = await this.notifications.findByKey(
+        req.clientId,
+        idempotencyKey,
+      );
       if (existing) return this.replay(existing, hash);
     }
 
@@ -61,16 +67,16 @@ export class NotificationService {
     if (!contacts) throw new UnknownUserError(`user ${req.userId} not found`);
 
     const destinations = this.destinationsFor(req.channel, contacts);
-    if (destinations.length === 0) throw new NoDestinationError(`user ${req.userId} has no destination for ${req.channel}`);
+    if (destinations.length === 0)
+      throw new NoDestinationError(
+        `user ${req.userId} has no destination for ${req.channel}`,
+      );
 
-    // Rendered now, so what is stored and queued is the final text: a later edit of the template
-    // cannot change a notification that is already waiting, and a missing template or parameter
-    // is reported to the caller instead of failing later in a worker.
     const payload = await this.resolve(req.channel, req.content);
 
-    // Contacts are resolved now, not at send time: a notification scheduled for next week goes to
-    // the devices the user has today. (Resolving later would need the contact lookup in the worker.)
-    const deferred = req.sendAt !== undefined && req.sendAt.getTime() > Date.now() + IMMEDIATE_WINDOW_MS;
+    const deferred =
+      req.sendAt !== undefined &&
+      req.sendAt.getTime() > Date.now() + IMMEDIATE_WINDOW_MS;
 
     const requestId = randomUUID();
     const rows = destinations.map(
@@ -89,12 +95,18 @@ export class NotificationService {
 
     let notifications: Notification[];
     try {
-      notifications = await this.notifications.insertPending(rows, idempotencyKey ? { key: idempotencyKey, hash } : undefined);
+      notifications = await this.notifications.insertPending(
+        rows,
+        idempotencyKey ? { key: idempotencyKey, hash } : undefined,
+      );
     } catch (err) {
       // Lost a race: a concurrent request with the same key committed between our check above
       // and our insert. The database picked the winner; we return its result.
       if (err instanceof DuplicateKeyError && idempotencyKey) {
-        const existing = await this.notifications.findByKey(req.clientId, idempotencyKey);
+        const existing = await this.notifications.findByKey(
+          req.clientId,
+          idempotencyKey,
+        );
         if (existing) return this.replay(existing, hash);
       }
       throw err;
@@ -105,21 +117,34 @@ export class NotificationService {
   }
 
   private async resolve(channel: Channel, content: Content): Promise<Payload> {
-    if (content.kind === "text") return { subject: content.subject, body: content.body };
+    if (content.kind === "text")
+      return { subject: content.subject, body: content.body };
     const template = await this.templates.find(content.name, channel);
-    if (!template) throw new TemplateNotFoundError(`template "${content.name}" has no ${channel} version`);
+    if (!template)
+      throw new TemplateNotFoundError(
+        `template "${content.name}" has no ${channel} version`,
+      );
     return {
-      subject: template.subject === undefined ? undefined : render(template.subject, content.params),
+      subject:
+        template.subject === undefined
+          ? undefined
+          : render(template.subject, content.params),
       body: render(template.body, content.params),
     };
   }
 
   private replay(existing: IdempotencyRecord, hash: string): SendResult {
     if (existing.requestHash !== hash) {
-      throw new IdempotencyKeyReuseError("Idempotency-Key was already used with a different request");
+      throw new IdempotencyKeyReuseError(
+        "Idempotency-Key was already used with a different request",
+      );
     }
     this.metrics.replayed();
-    return { requestId: existing.requestId, notifications: existing.notifications, replayed: true };
+    return {
+      requestId: existing.requestId,
+      notifications: existing.notifications,
+      replayed: true,
+    };
   }
 
   // Safety net for notifications that were stored but never reached the broker (crash between
@@ -189,8 +214,19 @@ function requestHash(req: SendRequest): string {
   const content =
     c.kind === "text"
       ? ["text", c.subject ?? null, c.body]
-      : ["template", c.name, Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b))];
+      : [
+          "template",
+          c.name,
+          Object.entries(c.params).sort(([a], [b]) => a.localeCompare(b)),
+        ];
   return createHash("sha256")
-    .update(JSON.stringify([req.userId, req.channel, content, req.sendAt?.getTime() ?? null]))
+    .update(
+      JSON.stringify([
+        req.userId,
+        req.channel,
+        content,
+        req.sendAt?.getTime() ?? null,
+      ]),
+    )
     .digest("hex");
 }

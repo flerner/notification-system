@@ -115,10 +115,20 @@ export class NotificationProcessor {
         payload: n.payload,
       });
     } catch (err) {
-      this.metrics.providerCall(n.channel, provider.name, "error", (Date.now() - started) / 1000);
+      this.metrics.providerCall(
+        n.channel,
+        provider.name,
+        "error",
+        (Date.now() - started) / 1000,
+      );
       return this.handleFailure(n, provider.name, err as ProviderError);
     }
-    this.metrics.providerCall(n.channel, provider.name, "ok", (Date.now() - started) / 1000);
+    this.metrics.providerCall(
+      n.channel,
+      provider.name,
+      "ok",
+      (Date.now() - started) / 1000,
+    );
     const recorded = await this.notifications.markSent(n.id);
     this.metrics.sent(n.channel, (Date.now() - n.createdAt.getTime()) / 1000);
     this.log.info(
@@ -142,12 +152,10 @@ export class NotificationProcessor {
   ): Promise<ProcessResult> {
     if (!err.retryable) return this.giveUp(n, err.message, "permanent");
 
+    //if we have no more retries (delay is undefined), give up, otherwise park the notif in corresponding rety queue.
     const delay = this.policy.delayAfter(n.attempts);
     if (delay === undefined) return this.giveUp(n, err.message, "exhausted");
 
-    // Row first, message second: the row says RETRYING even if the publish below fails. In that
-    // case the error propagates, the original message goes back on the queue, and a worker claims
-    // the notification again (sooner than the backoff, which is acceptable).
     const parked = await this.notifications.markRetrying(n.id, err.message);
     if (!parked) return "done";
     await this.publisher.publish(retryQueueName(n.queue, delay), {

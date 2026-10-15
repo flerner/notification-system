@@ -20,10 +20,6 @@ export interface RateLimiter {
   limitFor(channel: Channel): RateLimit;
 }
 
-// One Lua script does INCR and EXPIRE together. Redis runs a script without interleaving other
-// commands, so (1) concurrent workers each get a distinct count, and exactly `max` of them are
-// allowed; and (2) a counter can never be left without an expiry, which would block the user for
-// good. The TTL check also repairs a counter that somehow lost its expiry.
 const COUNT = `
 local count = redis.call('INCR', KEYS[1])
 if count == 1 or redis.call('TTL', KEYS[1]) < 0 then

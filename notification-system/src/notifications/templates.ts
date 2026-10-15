@@ -94,6 +94,7 @@ export class CachedTemplateRepository implements TemplateRepository {
         this.metrics.templateCache("hit");
         return template;
       } catch {
+        // a corrupt entry is just a miss
       }
     }
     this.metrics.templateCache("miss");

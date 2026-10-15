@@ -1,7 +1,13 @@
 import { z } from "zod";
 
 const rateLimitSpec = (fallback: string) =>
-  z.string().regex(/^[1-9]\d*\/[1-9]\d*$/, "must look like 20/3600 (max per window in seconds)").default(fallback);
+  z
+    .string()
+    .regex(
+      /^[1-9]\d*\/[1-9]\d*$/,
+      "must look like 20/3600 (max per window in seconds)",
+    )
+    .default(fallback);
 
 const schema = z.object({
   PORT: z.coerce.number().int().default(3000),
@@ -14,22 +20,27 @@ const schema = z.object({
   RELAY_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   RELAY_MIN_AGE_MS: z.coerce.number().int().positive().default(10000),
   TEMPLATE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
-  WORKER_QUEUES: z.string().default("").transform((v) => v.split(",").map((q) => q.trim()).filter(Boolean)),
+  WORKER_QUEUES: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((q) => q.trim())
+        .filter(Boolean),
+    ),
   WORKER_PREFETCH: z.coerce.number().int().positive().default(5),
-  // How long a worker owns a notification it is sending. Must exceed the slowest provider call.
-  // If a worker dies, its notification is picked up again after this long.
   CLAIM_LEASE_MS: z.coerce.number().int().positive().default(60000),
-  // Retry backoff: one retry per delay, so N delays means N+1 attempts in total. Comma separated.
-  // The api and the worker must agree on it (both declare the retry queues).
   RETRY_DELAYS_MS: z
     .string()
     .default("5000,30000,120000")
     .transform((v) => v.split(",").map((d) => Number(d.trim())))
-    .refine((ds) => ds.length > 0 && ds.every((d) => Number.isInteger(d) && d > 0), {
-      message: "must be a comma separated list of positive integers",
-    }),
-  // A provider call that takes longer than this counts as a (retryable) failure. Keep it well below
-  // CLAIM_LEASE_MS.
+    .refine(
+      (ds) => ds.length > 0 && ds.every((d) => Number.isInteger(d) && d > 0),
+      {
+        message: "must be a comma separated list of positive integers",
+      },
+    ),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
   BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30000),
