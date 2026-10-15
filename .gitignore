@@ -6,3 +6,4 @@ node_modules/
 dist/
 notification-system/TECH_DECISIONS.md
 .playwright-mcp/
+notification-system/NOTES.md
