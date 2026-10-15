@@ -189,6 +189,8 @@ Left out on purpose, because it would add code without adding a design idea:
 
 Known limits of what is built:
 
+- **Not load-tested.** The sizing in section 1 is arithmetic, not a measurement. The chaos demo proves nothing is lost under failure, at a
+  few requests per second on one machine with mock providers. Postgres writes are where I would expect the first limit (section 9, scaling).
 - A `FAILED` notification is final, and there is **no replay tool**. A notification that failed because the _provider_ was
   unhealthy (all attempts used) is a good candidate to resend; one the provider refused is not. The reason is recorded.
 - There is **no expiry**: a notification waiting behind a provider outage is delivered whenever it recovers, even hours late.
