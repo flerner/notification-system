@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { MessagePublisher } from "../infra/rabbit.js";
-import { UserNotFoundError, type UserRepository } from "../users/repository.js";
+import { UserNotFoundError, type Contacts, type UserRepository } from "../users/repository.js";
 import {
   DuplicateKeyError,
   type IdempotencyRecord,
@@ -186,10 +186,7 @@ export class NotificationService {
 
   private destinationsFor(
     channel: Channel,
-    {
-      user,
-      devices,
-    }: NonNullable<Awaited<ReturnType<UserRepository["findContacts"]>>>,
+    { user, devices }: Contacts,
   ): { destination: string; platform: NewNotification["platform"] }[] {
     switch (channel) {
       case "email":

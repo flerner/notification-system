@@ -4,12 +4,19 @@ import { pino } from "pino";
 import { loadConfig } from "../infra/config.js";
 import { createRegistry, startMetricsServer } from "../infra/metrics.js";
 import { RabbitPublisher } from "../infra/rabbit.js";
-import { allQueues, DEAD_LETTER_QUEUE, QUEUES } from "../notifications/queues.js";
+import {
+  allQueues,
+  DEAD_LETTER_QUEUE,
+  QUEUES,
+} from "../notifications/queues.js";
 import { RetryPolicy } from "../notifications/retry.js";
 import { NotificationProcessor } from "../notifications/processor.js";
 import { NotificationMetrics } from "../notifications/metrics.js";
 import { PgNotificationRepository } from "../notifications/repository.js";
-import { parseRateLimit, RedisRateLimiter } from "../notifications/rate-limit.js";
+import {
+  parseRateLimit,
+  RedisRateLimiter,
+} from "../notifications/rate-limit.js";
 import { PgSettingsRepository } from "../notifications/settings.js";
 import { buildProviders } from "../providers/index.js";
 import { startWorker } from "./consumer.js";
@@ -20,17 +27,32 @@ const logger = pino({ level: config.LOG_LEVEL });
 const registry = createRegistry();
 const metrics = new NotificationMetrics(registry);
 
-const queues = config.WORKER_QUEUES.length > 0 ? config.WORKER_QUEUES : [...QUEUES];
-const unknown = queues.filter((q) => !(QUEUES as readonly string[]).includes(q));
-if (unknown.length > 0) throw new Error(`Unknown WORKER_QUEUES: ${unknown.join(", ")}`);
+const queues =
+  config.WORKER_QUEUES.length > 0 ? config.WORKER_QUEUES : [...QUEUES];
+const unknown = queues.filter(
+  (q) => !(QUEUES as readonly string[]).includes(q),
+);
+if (unknown.length > 0)
+  throw new Error(`Unknown WORKER_QUEUES: ${unknown.join(", ")}`);
 
-const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 5000 });
+const db = new pg.Pool({
+  connectionString: config.DATABASE_URL,
+  max: 10,
+  connectionTimeoutMillis: 5000,
+});
+db.on("error", (err) =>
+  logger.error({ err }, "idle postgres connection error"),
+);
 
 if (config.CLAIM_LEASE_MS <= config.PROVIDER_TIMEOUT_MS) {
   throw new Error("CLAIM_LEASE_MS must be greater than PROVIDER_TIMEOUT_MS");
 }
 
-const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 500 });
+const redis = new Redis(config.REDIS_URL, {
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+  commandTimeout: 500,
+});
 const limiter = new RedisRateLimiter(
   redis,
   {
@@ -46,11 +68,18 @@ const providers = buildProviders({
   latencyMs: config.MOCK_LATENCY_MS,
   failureRate: config.MOCK_FAILURE_RATE,
   timeoutMs: config.PROVIDER_TIMEOUT_MS,
-  breaker: { failureThreshold: config.BREAKER_FAILURE_THRESHOLD, cooldownMs: config.BREAKER_COOLDOWN_MS },
+  breaker: {
+    failureThreshold: config.BREAKER_FAILURE_THRESHOLD,
+    cooldownMs: config.BREAKER_COOLDOWN_MS,
+  },
 });
 registerCircuitGauge(registry, providers);
 
-const publisher = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
+const publisher = new RabbitPublisher(
+  config.RABBITMQ_URL,
+  allQueues(config.RETRY_DELAYS_MS),
+  logger,
+);
 
 const processor = new NotificationProcessor(
   new PgNotificationRepository(db),
@@ -65,7 +94,13 @@ const processor = new NotificationProcessor(
 );
 
 const worker = await startWorker(
-  { url: config.RABBITMQ_URL, queues, prefetch: config.WORKER_PREFETCH, requeueDelayMs: 1000, circuitOpenDelayMs: 5000 },
+  {
+    url: config.RABBITMQ_URL,
+    queues,
+    prefetch: config.WORKER_PREFETCH,
+    requeueDelayMs: 1000,
+    circuitOpenDelayMs: 5000,
+  },
   processor,
   logger,
   (message) => publisher.publish(DEAD_LETTER_QUEUE, message),

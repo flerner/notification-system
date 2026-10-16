@@ -84,8 +84,7 @@ export class PgUserRepository implements UserRepository {
          RETURNING id, user_id AS "userId", platform, token`,
         [input.userId, input.platform, input.token],
       );
-      // What is still waiting for the previous owner would otherwise be delivered to the new one.
-      // A notification being sent right now is not touched: the claim already holds it.
+
       await client.query(
         `UPDATE notifications
          SET status = 'SKIPPED_STALE_DESTINATION', last_error = 'the device now belongs to another user', lease_expires_at = NULL

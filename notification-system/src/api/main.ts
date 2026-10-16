@@ -13,7 +13,10 @@ import { allQueues } from "../notifications/queues.js";
 import { startRelay } from "../notifications/relay.js";
 import { NotificationService } from "../notifications/service.js";
 import { PgSettingsRepository } from "../notifications/settings.js";
-import { CachedTemplateRepository, PgTemplateRepository } from "../notifications/templates.js";
+import {
+  CachedTemplateRepository,
+  PgTemplateRepository,
+} from "../notifications/templates.js";
 import { PgUserRepository } from "../users/repository.js";
 import { buildServer } from "./server.js";
 
@@ -22,9 +25,24 @@ const logger = pino({ level: config.LOG_LEVEL });
 const registry = createRegistry();
 const metrics = new NotificationMetrics(registry);
 
-const db = new pg.Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 2000 });
-const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 500 });
-const rabbit = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
+const db = new pg.Pool({
+  connectionString: config.DATABASE_URL,
+  max: 10,
+  connectionTimeoutMillis: 2000,
+});
+db.on("error", (err) =>
+  logger.error({ err }, "idle postgres connection error"),
+);
+const redis = new Redis(config.REDIS_URL, {
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+  commandTimeout: 500,
+});
+const rabbit = new RabbitPublisher(
+  config.RABBITMQ_URL,
+  allQueues(config.RETRY_DELAYS_MS),
+  logger,
+);
 
 await migrate(db, config.MIGRATIONS_DIR);
 
@@ -35,7 +53,14 @@ const templates = new CachedTemplateRepository(
   config.TEMPLATE_CACHE_TTL_SECONDS,
   metrics,
 );
-const notifications = new NotificationService(users, new PgNotificationRepository(db), templates, rabbit, logger, metrics);
+const notifications = new NotificationService(
+  users,
+  new PgNotificationRepository(db),
+  templates,
+  rabbit,
+  logger,
+  metrics,
+);
 
 const app = buildServer({
   logger,

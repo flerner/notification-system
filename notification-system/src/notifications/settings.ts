@@ -5,7 +5,7 @@ import { CHANNELS, type Channel } from "./queues.js";
 export interface SettingsRepository {
   isOptedIn(userId: string, channel: Channel): Promise<boolean>;
   setOptIn(userId: string, channel: Channel, optIn: boolean): Promise<void>;
-  list(userId: string): Promise<Record<Channel, boolean> | null>;
+  list(userId: string): Promise<Record<Channel, boolean>>;
 }
 
 const FOREIGN_KEY_VIOLATION = "23503";
@@ -36,9 +36,9 @@ export class PgSettingsRepository implements SettingsRepository {
     }
   }
 
-  async list(userId: string): Promise<Record<Channel, boolean> | null> {
+  async list(userId: string): Promise<Record<Channel, boolean>> {
     const { rowCount } = await this.db.query("SELECT 1 FROM users WHERE id = $1", [userId]);
-    if (rowCount === 0) return null;
+    if (rowCount === 0) throw new UserNotFoundError(`user ${userId} not found`);
     const { rows } = await this.db.query("SELECT channel, opt_in FROM notification_settings WHERE user_id = $1", [userId]);
     const settings = Object.fromEntries(CHANNELS.map((c) => [c, true])) as Record<Channel, boolean>;
     for (const r of rows) settings[r.channel as Channel] = r.opt_in;

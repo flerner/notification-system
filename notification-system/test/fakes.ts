@@ -175,8 +175,8 @@ export class InMemorySettingsRepository implements SettingsRepository {
     else this.optedOut.add(`${userId}:${channel}`);
   }
 
-  async list(userId: string): Promise<Record<Channel, boolean> | null> {
-    if (this.users && !(await this.users.findContacts(userId))) return null;
+  async list(userId: string): Promise<Record<Channel, boolean>> {
+    if (this.users && !(await this.users.findContacts(userId))) throw new UserNotFoundError(`user ${userId} not found`);
     const has = (c: Channel) => !this.optedOut.has(`${userId}:${c}`);
     return { push: has("push"), sms: has("sms"), email: has("email") };
   }

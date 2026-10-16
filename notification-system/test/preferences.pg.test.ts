@@ -53,7 +53,7 @@ describe.skipIf(!url)("settings and templates (real Postgres)", () => {
 
     it("an unknown user is reported, not silently accepted", async () => {
       await expect(settings.setOptIn("999", "email", false)).rejects.toBeInstanceOf(UserNotFoundError);
-      expect(await settings.list("999")).toBeNull();
+      await expect(settings.list("999")).rejects.toBeInstanceOf(UserNotFoundError);
     });
 
     it("the database refuses a channel it does not know", async () => {

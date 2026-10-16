@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { ResourceNotFoundError } from "./errors.js";
 import { CHANNELS } from "../notifications/queues.js";
 import type { TemplateRepository } from "../notifications/templates.js";
 
@@ -24,10 +25,7 @@ export function templateRoutes(templates: TemplateRepository): Router {
   router.get("/v1/templates/:name/:channel", async (req, res) => {
     const { name, channel } = key.parse(req.params);
     const found = await templates.find(name, channel);
-    if (!found) {
-      res.status(404).json({ error: `template "${name}" has no ${channel} version` });
-      return;
-    }
+    if (!found) throw new ResourceNotFoundError(`template "${name}" has no ${channel} version`);
     res.json(found);
   });
 

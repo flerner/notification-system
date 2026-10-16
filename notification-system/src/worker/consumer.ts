@@ -1,9 +1,10 @@
 import amqp from "amqplib";
 import type { Logger } from "pino";
 import { z } from "zod";
+import type { ProcessResult } from "../notifications/processor.js";
 
 export interface MessageProcessor {
-  process(notificationId: string, queue: string): Promise<"done" | "busy" | "circuit_open">;
+  process(notificationId: string, queue: string): Promise<ProcessResult>;
 }
 
 export interface WorkerOptions {

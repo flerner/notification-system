@@ -18,12 +18,7 @@ export function settingsRoutes(settings: SettingsRepository): Router {
 
   router.get("/users/:id/settings", async (req, res) => {
     const { id } = z.object({ id: userId }).parse(req.params);
-    const all = await settings.list(id);
-    if (!all) {
-      res.status(404).json({ error: `user ${id} not found` });
-      return;
-    }
-    res.json({ userId: id, ...all });
+    res.json({ userId: id, ...(await settings.list(id)) });
   });
 
   return router;
