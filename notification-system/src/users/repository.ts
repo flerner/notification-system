@@ -1,7 +1,8 @@
 import type pg from "pg";
 import { predecessors } from "../notifications/state.js";
 
-export type Platform = "ios" | "android" | "web";
+export const PLATFORMS = ["ios", "android", "web"] as const;
+export type Platform = (typeof PLATFORMS)[number];
 
 export interface User {
   id: string;

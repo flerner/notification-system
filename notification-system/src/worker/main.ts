@@ -49,8 +49,6 @@ const providers = buildProviders({
   breaker: { failureThreshold: config.BREAKER_FAILURE_THRESHOLD, cooldownMs: config.BREAKER_COOLDOWN_MS },
 });
 registerCircuitGauge(registry, providers);
-const missing = queues.filter((q) => !providers[q]);
-if (missing.length > 0) throw new Error(`No provider configured for: ${missing.join(", ")}`);
 
 const publisher = new RabbitPublisher(config.RABBITMQ_URL, allQueues(config.RETRY_DELAYS_MS), logger);
 

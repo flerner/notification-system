@@ -71,9 +71,9 @@ Everything is defined in [docker-compose.yml:1](../docker-compose.yml#L1).
 
 **The worker** ([main.ts:18](../src/worker/main.ts#L18)): the same configuration step, then it decides which queues to serve
 ([main.ts:23](../src/worker/main.ts#L23)), checks that the lease is longer than the provider timeout, builds the providers
-([main.ts:45](../src/worker/main.ts#L45)), the processor ([main.ts:57](../src/worker/main.ts#L57))
-and starts consuming ([main.ts:69](../src/worker/main.ts#L69)). If it loses the RabbitMQ connection it exits
-([main.ts:78](../src/worker/main.ts#L78)) and Docker restarts it.
+([main.ts:45](../src/worker/main.ts#L45)), the processor ([main.ts:55](../src/worker/main.ts#L55))
+and starts consuming ([main.ts:67](../src/worker/main.ts#L67)). If it loses the RabbitMQ connection it exits
+([main.ts:76](../src/worker/main.ts#L76)) and Docker restarts it.
 
 ## 4. The life of a user
 
@@ -82,14 +82,14 @@ and starts consuming ([main.ts:69](../src/worker/main.ts#L69)). If it loses the 
 `POST /users` with an email and/or a phone.
 
 1. The route [users.ts:26](../src/api/users.ts#L26) validates the body with Zod: a well-formed email (lower-cased, so `A@x.com` and `a@x.com` are the same person), a phone in international format ([users.ts:5](../src/api/users.ts#L5)), and at least one of the two.
-2. [repository.ts:49](../src/users/repository.ts#L49) inserts the row. The database enforces that email and phone are unique and that at least one exists ([001_users_and_devices.sql:3](../migrations/001_users_and_devices.sql#L3)).
+2. [repository.ts:57](../src/users/repository.ts#L57) inserts the row. The database enforces that email and phone are unique and that at least one exists ([001_users_and_devices.sql:3](../migrations/001_users_and_devices.sql#L3)).
 3. A unique violation becomes `DuplicateContactError` and the route answers 409.
 
 ### 4.2 A device is registered
 
-`POST /users/:id/devices` with a platform and a push token ([users.ts:39](../src/api/users.ts#L39)).
+`POST /users/:id/devices` with a platform and a push token ([users.ts:31](../src/api/users.ts#L31)).
 
-[repository.ts:64](../src/users/repository.ts#L64) is an **upsert on the token** ([repository.ts:72](../src/users/repository.ts#L72)). Registering the same token twice changes nothing; registering a token that belongs to another user moves it to this user, which is what happens when someone logs out and another person logs in on the same phone. An unknown user is a foreign-key failure, reported as 404.
+[repository.ts:72](../src/users/repository.ts#L72) is an **upsert on the token** ([repository.ts:81](../src/users/repository.ts#L81)). Registering the same token twice changes nothing; registering a token that belongs to another user moves it to this user, which is what happens when someone logs out and another person logs in on the same phone. An unknown user is a foreign-key failure, reported as 404.
 
 ### 4.3 A user chooses what to receive
 
@@ -99,16 +99,16 @@ It stores one row per user and channel ([settings.ts:24](../src/notifications/se
 
 ### 4.4 Templates (written by an operator)
 
-`PUT /v1/templates/:name/:channel` ([templates.ts:17](../src/api/templates.ts#L17)) stores text with `{{placeholders}}`. Rendering is [templates.ts:23](../src/notifications/templates.ts#L23): every placeholder must have a value (otherwise `TemplateParamError`), values are inserted as plain text in one pass, so a value that itself contains `{{x}}` is not expanded. Reads go through a Redis cache ([templates.ts:80](../src/notifications/templates.ts#L80)): on a miss it reads Postgres and fills the cache, an update deletes the cached copy, and if Redis fails ([cache.ts:13](../src/infra/cache.ts#L13)) every failure is treated as a miss, so a Redis outage only makes things slower.
+`PUT /v1/templates/:name/:channel` ([templates.ts:18](../src/api/templates.ts#L18)) stores text with `{{placeholders}}`. Rendering is [templates.ts:23](../src/notifications/templates.ts#L23): every placeholder must have a value (otherwise `TemplateParamError`), values are inserted as plain text in one pass, so a value that itself contains `{{x}}` is not expanded. Reads go through a Redis cache ([templates.ts:80](../src/notifications/templates.ts#L80)): on a miss it reads Postgres and fills the cache, an update deletes the cached copy, and if Redis fails ([cache.ts:13](../src/infra/cache.ts#L13)) every failure is treated as a miss, so a Redis outage only makes things slower.
 
 ## 5. The life of a client
 
 A client is a service allowed to use the API.
 
 - **Creating one:** `npm run create-client -- billing` runs [scripts/create-client.ts](../scripts/create-client.ts): it generates credentials ([credentials.ts:16](../src/clients/credentials.ts#L16)), stores the key and **only a SHA-256 hash of the secret** ([credentials.ts:12](../src/clients/credentials.ts#L12)), and prints the secret once. We never keep it, so a database leak does not leak working credentials.
-- **Using it:** every request except `/live` and `/health` carries `Authorization: Basic base64(appKey:secret)`. The middleware [auth.ts:19](../src/api/auth.ts#L19) is registered once in [server.ts:53](../src/api/server.ts#L53), before the body is parsed, so every route added later is protected by default.
+- **Using it:** every request except `/live` and `/health` carries `Authorization: Basic base64(appKey:secret)`. The middleware [auth.ts:19](../src/api/auth.ts#L19) is registered once in [server.ts:54](../src/api/server.ts#L54), before the body is parsed, so every route added later is protected by default.
 - **Checking it:** [credentials.ts:27](../src/clients/credentials.ts#L27) looks the key up, hashes the secret that was sent and compares the hashes in constant time ([credentials.ts:31](../src/clients/credentials.ts#L31)). An unknown key goes through the same comparison, so timing does not reveal which keys exist. A missing, malformed, unknown, wrong or revoked credential all get the same 401 ([auth.ts:24](../src/api/auth.ts#L24)).
-- **What it is used for afterwards:** the client id is put on `res.locals.client`, written on every notification it creates (`client_id`), used to scope idempotency keys, and added to the request log line. The `Authorization` header itself is never logged ([server.ts:35](../src/api/server.ts#L35) logs only id, method and URL).
+- **What it is used for afterwards:** the client id is put on `res.locals.client`, written on every notification it creates (`client_id`), used to scope idempotency keys, and added to the request log line. The `Authorization` header itself is never logged ([server.ts:36](../src/api/server.ts#L36) logs only id, method and URL).
 
 ## 6. The life of a notification
 
@@ -116,19 +116,19 @@ This is the heart of the system. The numbers are the order in which things happe
 
 ### 6.1 The request arrives (API)
 
-1. **The route** [notifications.ts:51](../src/api/notifications.ts#L51) checks the body with [notifications.ts:24](../src/api/notifications.ts#L24): either `body` (with an optional `subject`) or a `template` with `params`, never both; an optional `sendAt` ([notifications.ts:32](../src/api/notifications.ts#L32)) up to 30 days ahead. It reads the optional `Idempotency-Key` header and the client from the middleware, and calls the service.
-2. **The service** [service.ts:56](../src/notifications/service.ts#L56) does the rest of the acceptance.
-3. **Is this a retry?** If there is an `Idempotency-Key`, the service looks it up for this client first ([service.ts:59](../src/notifications/service.ts#L59)). If it finds one, it compares a hash of the request ([service.ts:212](../src/notifications/service.ts#L212)) with the stored one: the same request replays the original answer, a different one is refused ([service.ts:136](../src/notifications/service.ts#L136)). Nothing new is created.
-4. **Who is the user and where do they receive it?** [repository.ts:39](../src/users/repository.ts#L39) loads the user and their devices, and [service.ts:188](../src/notifications/service.ts#L188) picks the destinations for the channel: the email address, the phone number, or every device token. No destination is a 422.
-5. **What does it say?** [service.ts:75](../src/notifications/service.ts#L75) turns the content into final text, rendering the template if there is one. A missing template or parameter is a 422 now, not a surprise later in a worker. The stored text is final, so editing a template cannot change a notification that is already waiting.
-6. **Now or later?** [service.ts:79](../src/notifications/service.ts#L79): a `sendAt` more than a second ahead is scheduled; anything else is sent now.
-7. **Store it.** [service.ts:100](../src/notifications/service.ts#L100), implemented by [repository.ts:78](../src/notifications/repository.ts#L78), writes in **one transaction**: the idempotency key ([repository.ts:88](../src/notifications/repository.ts#L88)) and one `PENDING` row per destination. If a concurrent request with the same key won the race, the insert fails with `DuplicateKeyError` and the service replays the winner's result ([service.ts:105](../src/notifications/service.ts#L105)). The key and the rows exist together or not at all.
-8. **Queue it, unless it is scheduled.** [service.ts:115](../src/notifications/service.ts#L115). [service.ts:164](../src/notifications/service.ts#L164) sends `{notificationId}` to each notification's queue and waits for RabbitMQ to confirm it, and only then marks the row published. A failed publish is only logged: the row is already stored, and the relay will queue it.
+1. **The route** [notifications.ts:48](../src/api/notifications.ts#L48) checks the body with [notifications.ts:21](../src/api/notifications.ts#L21): either `body` (with an optional `subject`) or a `template` with `params`, never both; an optional `sendAt` ([notifications.ts:29](../src/api/notifications.ts#L29)) up to 30 days ahead. It reads the optional `Idempotency-Key` header and the client from the middleware, and calls the service.
+2. **The service** [service.ts:55](../src/notifications/service.ts#L55) does the rest of the acceptance.
+3. **Is this a retry?** If there is an `Idempotency-Key`, the service looks it up for this client first ([service.ts:58](../src/notifications/service.ts#L58)). If it finds one, it compares a hash of the request ([service.ts:211](../src/notifications/service.ts#L211)) with the stored one: the same request replays the original answer, a different one is refused ([service.ts:135](../src/notifications/service.ts#L135)). Nothing new is created.
+4. **Who is the user and where do they receive it?** [repository.ts:44](../src/users/repository.ts#L44) loads the user and their devices, and [service.ts:187](../src/notifications/service.ts#L187) picks the destinations for the channel: the email address, the phone number, or every device token. No destination is a 422.
+5. **What does it say?** [service.ts:74](../src/notifications/service.ts#L74) turns the content into final text, rendering the template if there is one. A missing template or parameter is a 422 now, not a surprise later in a worker. The stored text is final, so editing a template cannot change a notification that is already waiting.
+6. **Now or later?** [service.ts:78](../src/notifications/service.ts#L78): a `sendAt` more than a second ahead is scheduled; anything else is sent now.
+7. **Store it.** [service.ts:99](../src/notifications/service.ts#L99), implemented by [repository.ts:78](../src/notifications/repository.ts#L78), writes in **one transaction**: the idempotency key ([repository.ts:88](../src/notifications/repository.ts#L88)) and one `PENDING` row per destination. If a concurrent request with the same key won the race, the insert fails with `DuplicateKeyError` and the service replays the winner's result ([service.ts:104](../src/notifications/service.ts#L104)). The key and the rows exist together or not at all.
+8. **Queue it, unless it is scheduled.** [service.ts:114](../src/notifications/service.ts#L114). [service.ts:163](../src/notifications/service.ts#L163) sends `{notificationId}` to each notification's queue and waits for RabbitMQ to confirm it, and only then marks the row published. A failed publish is only logged: the row is already stored, and the relay will queue it.
 9. **Answer.** The route returns **202 Accepted** with the request id and each notification's id and status. 202 means "stored", not "delivered".
 
-The queue for a notification is chosen in [queues.ts:15](../src/notifications/queues.ts#L15): `push.ios`, `push.android`, `push.web`, `sms` or `email`. The publisher ([rabbit.ts:12](../src/infra/rabbit.ts#L12)) keeps one long-lived connection with publisher confirms, declares every queue when it opens ([rabbit.ts:48](../src/infra/rabbit.ts#L48)) and gives up on a publish after 5 seconds, so a stalled broker cannot hang a request.
+The queue for a notification is chosen in [queues.ts:16](../src/notifications/queues.ts#L16): `push.ios`, `push.android`, `push.web`, `sms` or `email`. The publisher ([rabbit.ts:12](../src/infra/rabbit.ts#L12)) keeps one long-lived connection with publisher confirms, declares every queue when it opens ([rabbit.ts:48](../src/infra/rabbit.ts#L48)) and gives up on a publish after 5 seconds, so a stalled broker cannot hang a request.
 
-Errors from all of this are turned into HTTP answers in two places: domain errors in the route (404 unknown user, 422 for the refused cases), and everything else in [server.ts:63](../src/api/server.ts#L63) (validation 400, malformed JSON 400, anything unexpected a logged 500 with no details).
+Errors from all of this are turned into HTTP answers in one place, [server.ts:64](../src/api/server.ts#L64). The routes do not catch: the table of domain errors and their statuses (404 unknown user, 409 duplicate contact, 422 for the refused cases) is [errors.ts:15](../src/api/errors.ts#L15), and the same handler answers validation 400, malformed JSON 400, and anything unexpected with a logged 500 with no details.
 
 ### 6.2 The safety net: the relay (API)
 
@@ -165,13 +165,13 @@ The acknowledgement comes only after the outcome is stored. If the worker dies b
 | a temporary error, attempts left | `RETRYING`, and a message to a retry queue | [processor.ts:172](../src/notifications/processor.ts#L172) |
 | a temporary error, no attempts left | `FAILED` ("exhausted"), a message to the dead-letter queue | [processor.ts:196](../src/notifications/processor.ts#L196) |
 
-How a retry works: the delay comes from the number of attempts so far ([retry.ts:8](../src/notifications/retry.ts#L8): 5 s, then 30 s, then 2 min by default). The processor publishes the notification id to a queue named after that delay, for example `email.retry.5000` ([queues.ts:24](../src/notifications/queues.ts#L24)). That queue has a time limit and a rule (declared in [queues.ts:28](../src/notifications/queues.ts#L28)): when a message has waited that long, RabbitMQ moves it back to the main queue by itself. No timer in our code. A worker then receives it again like a new message and claims it from `RETRYING`.
+How a retry works: the delay comes from the number of attempts so far ([retry.ts:8](../src/notifications/retry.ts#L8): 5 s, then 30 s, then 2 min by default). The processor publishes the notification id to a queue named after that delay, for example `email.retry.5000` ([queues.ts:25](../src/notifications/queues.ts#L25)). That queue has a time limit and a rule (declared in [queues.ts:29](../src/notifications/queues.ts#L29)): when a message has waited that long, RabbitMQ moves it back to the main queue by itself. No timer in our code. A worker then receives it again like a new message and claims it from `RETRYING`.
 
 The row is written before the retry message is published. If the publish fails, the error goes up, the original message is put back, and a worker claims the notification again a bit sooner than the backoff: acceptable. When it gives up, the row is written first and the dead-letter publish is best effort: the `FAILED` row is the truth, the dead-letter queue is a signal for operators.
 
 ### 6.6 A provider that is down: the circuit breaker
 
-[circuit-breaker.ts:10](../src/providers/circuit-breaker.ts#L10) counts consecutive temporary failures ([circuit-breaker.ts:37](../src/providers/circuit-breaker.ts#L37)). After 5 it opens for 30 seconds: while open, step 1 of the processor returns early and the consumer puts the message back after 5 seconds. After the cooldown the next call is a trial: a success closes the circuit, a failure opens it again. There is one breaker per provider, built in [index.ts:13](../src/providers/index.ts#L13), so one provider being down does not hold back the others. A permanent error does not count against the breaker: the provider answered.
+[circuit-breaker.ts:10](../src/providers/circuit-breaker.ts#L10) counts consecutive temporary failures ([circuit-breaker.ts:37](../src/providers/circuit-breaker.ts#L37)). After 5 it opens for 30 seconds: while open, step 1 of the processor returns early and the consumer puts the message back after 5 seconds. After the cooldown the next call is a trial: a success closes the circuit, a failure opens it again. There is one breaker per provider, built in [index.ts:14](../src/providers/index.ts#L14), so one provider being down does not hold back the others. A permanent error does not count against the breaker: the provider answered.
 
 ### 6.7 Every status, and who sets it
 
@@ -184,7 +184,7 @@ The legal changes are in one table, [state.ts:11](../src/notifications/state.ts#
 | `RETRYING` | a send failed, waiting in a retry queue | [repository.ts:212](../src/notifications/repository.ts#L212) |
 | `SENT` | the provider accepted it. Final | [repository.ts:190](../src/notifications/repository.ts#L190) |
 | `FAILED` | given up. Final | [repository.ts:220](../src/notifications/repository.ts#L220) |
-| `SKIPPED_OPT_OUT`, `SKIPPED_RATE_LIMITED`, `SKIPPED_STALE_DESTINATION` | deliberately not sent. Final | [repository.ts:199](../src/notifications/repository.ts#L199), [users/repository.ts:80](../src/users/repository.ts#L80) |
+| `SKIPPED_OPT_OUT`, `SKIPPED_RATE_LIMITED`, `SKIPPED_STALE_DESTINATION` | deliberately not sent. Final | [repository.ts:199](../src/notifications/repository.ts#L199), [users/repository.ts:90](../src/users/repository.ts#L90) |
 
 ### 6.8 Special paths
 
@@ -250,11 +250,11 @@ Run `npm test` for those that need nothing; set the `TEST_*` variables (see the 
 
 | Question | Look at |
 |---|---|
-| Where does a request become a stored notification? | [service.ts:56](../src/notifications/service.ts#L56) and [repository.ts:78](../src/notifications/repository.ts#L78) |
-| Where is a message put on a queue? | [service.ts:164](../src/notifications/service.ts#L164) and [rabbit.ts:23](../src/infra/rabbit.ts#L23) |
+| Where does a request become a stored notification? | [service.ts:55](../src/notifications/service.ts#L55) and [repository.ts:78](../src/notifications/repository.ts#L78) |
+| Where is a message put on a queue? | [service.ts:163](../src/notifications/service.ts#L163) and [rabbit.ts:23](../src/infra/rabbit.ts#L23) |
 | What decides who wins when two workers get the same message? | [repository.ts:169](../src/notifications/repository.ts#L169) |
 | Where is a retry scheduled? | [processor.ts:162](../src/notifications/processor.ts#L162) |
-| Where is the wait before a retry? | [queues.ts:28](../src/notifications/queues.ts#L28) (a queue with a time limit) |
+| Where is the wait before a retry? | [queues.ts:29](../src/notifications/queues.ts#L29) (a queue with a time limit) |
 | Where does a notification become `FAILED`? | [processor.ts:196](../src/notifications/processor.ts#L196) |
 | Where is an opt-out applied? | [processor.ts:69](../src/notifications/processor.ts#L69) |
 | Where is the rate limit applied? | [processor.ts:79](../src/notifications/processor.ts#L79) and [rate-limit.ts:23](../src/notifications/rate-limit.ts#L23) |

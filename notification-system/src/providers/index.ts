@@ -1,6 +1,7 @@
 import { CircuitBreaker, type BreakerOptions } from "./circuit-breaker.js";
 import { GuardedProvider } from "./guarded.js";
 import { MockProvider } from "./mock.js";
+import type { Queue } from "../notifications/queues.js";
 import type { ChannelProvider } from "./provider.js";
 
 export interface ProvidersOptions {
@@ -10,7 +11,7 @@ export interface ProvidersOptions {
   breaker: BreakerOptions;
 }
 
-export function buildProviders(opts: ProvidersOptions): Record<string, GuardedProvider> {
+export function buildProviders(opts: ProvidersOptions): Record<Queue, GuardedProvider> {
   const mock = (name: string): ChannelProvider => new MockProvider(name, opts);
   const guard = (provider: ChannelProvider) => new GuardedProvider(provider, new CircuitBreaker(opts.breaker), opts.timeoutMs);
   return {

@@ -35,6 +35,7 @@ Decisions that relate to Chapter 10 (or the chapters it builds on) carry a `Book
 | [D-26](#d-26) | Grafana is provisioned from files, the dashboard is generated from code | Ch. 10 monitor queued; Fig. 10-12 |
 | [D-27](#d-27) | Alert rules as code in Prometheus, with nothing to deliver them | Ch. 10 retry: alert; monitor queued |
 | [D-28](#d-28) | Scheduled notifications reuse the relay: `sendAt`, stored but not published until due | Ch. 10 Step 1: scheduled triggers |
+| [D-29](#d-29) | Errors are caught only where something can be done about them; the HTTP boundary translates the rest in one place |  |
 
 ## D-01
 
@@ -299,3 +300,11 @@ Decisions that relate to Chapter 10 (or the chapters it builds on) carry a `Book
 - The relay now drains in batches (`drainRelay`, stops at the first batch that is not full, with a safety limit of 50 batches per tick), so 120 notifications due at the same instant were all published within about a second.
 - **Limits:** precision is one relay tick (5 s by default) after the due time; the relay runs inside the API, so scheduled notifications wait if every API instance is down (moving it to its own process or the worker is the fix); contacts are resolved when the request is accepted, not at send time, so a notification scheduled for next week goes to the devices the user has today; no way to cancel a scheduled notification; send times are compared with the database's clock, so a skew between machines shifts them by the same amount (a test that assumed the clocks agreed was flaky until it waited for the database to say "due" instead of sleeping).
 
+## D-29
+
+**Errors are caught only where something can be done about them; the HTTP boundary translates the rest in one place**
+
+- **The rule.** Catch an error where there is logic to run: retry, fall back, replay, skip, or translate it. If the only thing to do is answer the caller, let it go up. A catch that cannot recover rethrows.
+- **The HTTP boundary.** Routes do not catch. [errors.ts](../src/api/errors.ts) maps domain errors to a status (404, 409, 422) and `onError` in [server.ts](../src/api/server.ts) answers: validation 400, anything unknown a logged 500. A new error is one class and one line in the table.
+- **Caught on purpose:** the provider call (retry or give up), failures to announce or to reach Redis (logged, never a second send), Postgres codes turned into domain errors, and the consumer (malformed message to the dead-letter queue, infrastructure failure back on the queue).
+- **Trade-off:** a domain error missing from the table becomes a 500.

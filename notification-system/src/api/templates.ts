@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
+import { CHANNELS } from "../notifications/queues.js";
 import type { TemplateRepository } from "../notifications/templates.js";
 
 export const templateName = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "name must be lowercase letters, digits, - or _");
-const channel = z.enum(["push", "sms", "email"]);
+const channel = z.enum(CHANNELS);
 
 const key = z.object({ name: templateName, channel });
 const body = z.object({

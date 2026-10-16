@@ -1,19 +1,20 @@
-import type { Platform } from "../users/repository.js";
+import { PLATFORMS, type Platform } from "../users/repository.js";
 
-export type Channel = "push" | "sms" | "email";
+export const CHANNELS = ["push", "sms", "email"] as const;
+export type Channel = (typeof CHANNELS)[number];
 
-export const QUEUES = [
-  "push.ios",
-  "push.android",
-  "push.web",
+export type Queue = `push.${Platform}` | "sms" | "email";
+
+export const QUEUES: readonly Queue[] = [
+  ...PLATFORMS.map((platform) => `push.${platform}` as const),
   "sms",
   "email",
-] as const;
+];
 
 export const DEAD_LETTER_QUEUE = "dead-letter";
 
-export function queueFor(channel: Channel, platform: Platform | null): string {
-  return channel === "push" ? `push.${platform}` : channel;
+export function queueFor(channel: Channel, platform: Platform | null): Queue {
+  return channel === "push" ? (`push.${platform}` as Queue) : channel;
 }
 
 export interface QueueSpec {

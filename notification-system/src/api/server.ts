@@ -15,6 +15,7 @@ import { notificationRoutes } from "./notifications.js";
 import { settingsRoutes } from "./settings.js";
 import { templateRoutes } from "./templates.js";
 import { userRoutes } from "./users.js";
+import { httpStatusOf } from "./errors.js";
 
 export function buildServer(opts: {
   logger: Logger;
@@ -63,6 +64,11 @@ export function buildServer(opts: {
   const onError: ErrorRequestHandler = (err, req, res, _next) => {
     if (err instanceof ZodError) {
       res.status(400).json({ error: "validation failed", issues: err.issues });
+      return;
+    }
+    const status = httpStatusOf(err);
+    if (status !== undefined) {
+      res.status(status).json({ error: err.message });
       return;
     }
     if (typeof err.status === "number" && err.status >= 400 && err.status < 500) {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { MessagePublisher } from "../infra/rabbit.js";
-import type { UserRepository } from "../users/repository.js";
+import { UserNotFoundError, type UserRepository } from "../users/repository.js";
 import {
   DuplicateKeyError,
   type IdempotencyRecord,
@@ -22,7 +22,6 @@ import {
 const IMMEDIATE_WINDOW_MS = 1000;
 
 export class NoDestinationError extends Error {}
-export class UnknownUserError extends Error {}
 export class IdempotencyKeyReuseError extends Error {}
 
 export type Content =
@@ -64,7 +63,7 @@ export class NotificationService {
     }
 
     const contacts = await this.users.findContacts(req.userId);
-    if (!contacts) throw new UnknownUserError(`user ${req.userId} not found`);
+    if (!contacts) throw new UserNotFoundError(`user ${req.userId} not found`);
 
     const destinations = this.destinationsFor(req.channel, contacts);
     if (destinations.length === 0)

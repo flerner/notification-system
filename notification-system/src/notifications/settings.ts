@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { UserNotFoundError } from "../users/repository.js";
-import type { Channel } from "./queues.js";
+import { CHANNELS, type Channel } from "./queues.js";
 
 export interface SettingsRepository {
   isOptedIn(userId: string, channel: Channel): Promise<boolean>;
@@ -40,7 +40,7 @@ export class PgSettingsRepository implements SettingsRepository {
     const { rowCount } = await this.db.query("SELECT 1 FROM users WHERE id = $1", [userId]);
     if (rowCount === 0) return null;
     const { rows } = await this.db.query("SELECT channel, opt_in FROM notification_settings WHERE user_id = $1", [userId]);
-    const settings = { push: true, sms: true, email: true };
+    const settings = Object.fromEntries(CHANNELS.map((c) => [c, true])) as Record<Channel, boolean>;
     for (const r of rows) settings[r.channel as Channel] = r.opt_in;
     return settings;
   }

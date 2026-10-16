@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { IdempotencyKeyReuseError, NoDestinationError, UnknownUserError } from "../src/notifications/service.js";
+import { IdempotencyKeyReuseError, NoDestinationError } from "../src/notifications/service.js";
+import { UserNotFoundError } from "../src/users/repository.js";
 import { TemplateNotFoundError, TemplateParamError } from "../src/notifications/templates.js";
 import { buildTestApp } from "./fakes.js";
 
@@ -50,7 +51,7 @@ describe("NotificationService.send", () => {
   });
 
   it("rejects an unknown user and stores nothing", async () => {
-    await expect(t.notifications.send({ clientId: CLIENT, userId: "999", channel: "email", content })).rejects.toBeInstanceOf(UnknownUserError);
+    await expect(t.notifications.send({ clientId: CLIENT, userId: "999", channel: "email", content })).rejects.toBeInstanceOf(UserNotFoundError);
     expect(t.notificationRows.rows).toHaveLength(0);
   });
 

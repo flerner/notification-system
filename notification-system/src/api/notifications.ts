@@ -1,12 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
-import { TemplateNotFoundError, TemplateParamError } from "../notifications/templates.js";
+import { CHANNELS } from "../notifications/queues.js";
 import type { Client } from "../clients/credentials.js";
 import { templateName } from "./templates.js";
 import {
-  IdempotencyKeyReuseError,
-  NoDestinationError,
-  UnknownUserError,
   type Content,
   type NotificationService,
 } from "../notifications/service.js";
@@ -24,7 +21,7 @@ const params = z
 const sendBody = z
   .object({
     userId: z.string().regex(/^\d+$/, "userId must be a number"),
-    channel: z.enum(["push", "sms", "email"]),
+    channel: z.enum(CHANNELS),
     subject: z.string().min(1).max(200).optional(),
     body: z.string().min(1).max(10_000).optional(),
     template: templateName.optional(),
@@ -56,47 +53,27 @@ export function notificationRoutes(service: NotificationService): Router {
         ? { kind: "text", subject: input.subject, body: input.body! }
         : { kind: "template", name: input.template, params: input.params ?? {} };
     const key = idempotencyKey.parse(req.get("Idempotency-Key"));
-    try {
-      const { requestId, notifications, replayed } = await service.send(
-        {
-          clientId: (res.locals.client as Client).id,
-          userId,
-          channel,
-          content,
-          sendAt: input.sendAt === undefined ? undefined : new Date(input.sendAt),
-        },
-        key,
-      );
-      if (replayed) res.set("Idempotent-Replayed", "true");
-      res.status(202).json({
-        requestId,
-        notifications: notifications.map((n) => ({
-          id: n.id,
-          channel: n.channel,
-          platform: n.platform,
-          status: n.status,
-          sendAt: n.sendAt,
-        })),
-      });
-    } catch (err) {
-      if (err instanceof UnknownUserError) {
-        res.status(404).json({ error: err.message });
-        return;
-      }
-      if (err instanceof IdempotencyKeyReuseError) {
-        res.status(422).json({ error: err.message });
-        return;
-      }
-      if (err instanceof TemplateNotFoundError || err instanceof TemplateParamError) {
-        res.status(422).json({ error: err.message });
-        return;
-      }
-      if (err instanceof NoDestinationError) {
-        res.status(422).json({ error: err.message });
-        return;
-      }
-      throw err;
-    }
+    const { requestId, notifications, replayed } = await service.send(
+      {
+        clientId: (res.locals.client as Client).id,
+        userId,
+        channel,
+        content,
+        sendAt: input.sendAt === undefined ? undefined : new Date(input.sendAt),
+      },
+      key,
+    );
+    if (replayed) res.set("Idempotent-Replayed", "true");
+    res.status(202).json({
+      requestId,
+      notifications: notifications.map((n) => ({
+        id: n.id,
+        channel: n.channel,
+        platform: n.platform,
+        status: n.status,
+        sendAt: n.sendAt,
+      })),
+    });
   });
 
   return router;
