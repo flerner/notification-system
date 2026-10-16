@@ -6,7 +6,7 @@ import { DuplicateContactError, PgUserRepository, UserNotFoundError } from "../s
 
 // Integration test against a real Postgres (the constraints are the behavior under test).
 // Skipped unless TEST_DATABASE_URL is set, e.g.:
-//   TEST_DATABASE_URL=postgres://notif:notif@localhost:5432/notifications npm test
+//   npm run test:integration
 const url = process.env.TEST_DATABASE_URL;
 
 describe.skipIf(!url)("PgUserRepository (real Postgres)", () => {

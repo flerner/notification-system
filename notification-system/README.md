@@ -89,17 +89,13 @@ empties the notifications table and recreates the api and worker containers, and
 
 ```bash
 npm test                  # unit and API tests, no infrastructure needed
+npm run test:integration  # everything, including the tests that need the running stack
 ```
 
-The tests that need real infrastructure are skipped unless you point them at it (with the stack up):
-
-```bash
-TEST_DATABASE_URL=postgres://notif:notif@localhost:5432/notifications \
-TEST_RABBITMQ_URL=amqp://notif:notif@localhost:5672 \
-TEST_REDIS_URL=redis://localhost:6379 npm test
-```
-
-These empty the notifications, users, templates and clients tables, so run `npm run seed` afterwards.
+`test:integration` needs `docker compose up -d`. It runs the Postgres tests in their own database, `notifications_test`
+(created on the first run), and Redis tests in database 1, so your data and the demo users are not touched. Postgres tests
+refuse to run on any database whose name does not end in `_test`. To point it elsewhere, set `TEST_DATABASE_URL`,
+`TEST_RABBITMQ_URL` and `TEST_REDIS_URL`.
 
 ## Configuration
 

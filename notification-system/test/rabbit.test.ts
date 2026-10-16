@@ -4,7 +4,7 @@ import { RabbitPublisher } from "../src/infra/rabbit.js";
 import { silentLogger } from "./fakes.js";
 
 // Integration test against a real RabbitMQ. Skipped unless TEST_RABBITMQ_URL is set, e.g.:
-//   TEST_RABBITMQ_URL=amqp://notif:notif@localhost:5672 npm test
+//   npm run test:integration
 const url = process.env.TEST_RABBITMQ_URL;
 
 describe.skipIf(!url)("RabbitPublisher (real RabbitMQ)", () => {

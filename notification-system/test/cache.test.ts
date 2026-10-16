@@ -20,7 +20,7 @@ describe("RedisCache when Redis is failing", () => {
 });
 
 // Integration test against a real Redis. Skipped unless TEST_REDIS_URL is set, e.g.:
-//   TEST_REDIS_URL=redis://localhost:6379 npm test
+//   npm run test:integration
 const url = process.env.TEST_REDIS_URL;
 
 describe.skipIf(!url)("RedisCache (real Redis)", () => {

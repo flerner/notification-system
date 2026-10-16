@@ -220,7 +220,7 @@ The legal changes are in one table, [state.ts:11](../src/notifications/state.ts#
 
 ## 9. The tests
 
-Run `npm test` for those that need nothing; set the `TEST_*` variables (see the README) to include the ones that use real Postgres, RabbitMQ and Redis.
+Run `npm test` for those that need nothing, and `npm run test:integration` (with the stack up) to include the ones that use real Postgres, RabbitMQ and Redis. The Postgres ones run in their own `notifications_test` database.
 
 | Area | Files |
 |---|---|

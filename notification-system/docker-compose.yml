@@ -55,7 +55,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U notif -d notifications"]
+      # -h 127.0.0.1: on a new volume the image first runs a temporary server that only accepts
+      # socket connections. Checking over TCP passes only once the real server is up.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U notif -d notifications"]
       interval: 5s
       timeout: 3s
       retries: 10

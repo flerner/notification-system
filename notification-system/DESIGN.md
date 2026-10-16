@@ -163,12 +163,12 @@ dead-letter queue, a growing backlog, an open circuit, a high failure rate, Redi
 
 ## 8. How it was tested
 
-- **Unit and API tests (238)** run the whole core against in-memory versions of every interface: the state machine, retries
+- **Unit and API tests (241)** run the whole core against in-memory versions of every interface: the state machine, retries
   and backoff, the circuit breaker, idempotency, templates, opt-out, rate limit, authentication, metrics.
-- **Integration tests (66 more, 304 in all)** use real Postgres, RabbitMQ and Redis for what only they can prove: eight
+- **Integration tests (68 more, 309 in all)** use real Postgres, RabbitMQ and Redis for what only they can prove: eight
   workers racing for one claim and exactly one winning, six simultaneous requests with one idempotency key storing one
   notification, a message really coming back from a retry queue after its delay, a rate-limit counter that counts exactly under
-  50 concurrent callers. They are skipped unless the services are available.
+  50 concurrent callers. `npm run test:integration` runs them, in a separate `notifications_test` database; a plain `npm test` skips them.
 - **A chaos demo** (`npm run demo:chaos -- --workers 3`) drives load and a spike, then kills a worker, takes down RabbitMQ and Redis,
   and makes the provider flaky and then dead, and finishes with a verdict. One run: 735 requests, all accepted;
   996 notifications stored, exactly the 996 the API reported; 864 sent and 132 failed on purpose (an invalid device token and

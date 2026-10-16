@@ -5,7 +5,7 @@ import { startWorker, type MessageProcessor, type RunningWorker } from "../src/w
 import { silentLogger } from "./fakes.js";
 
 // Integration test against a real RabbitMQ. Skipped unless TEST_RABBITMQ_URL is set, e.g.:
-//   TEST_RABBITMQ_URL=amqp://notif:notif@localhost:5672 npm test
+//   npm run test:integration
 const url = process.env.TEST_RABBITMQ_URL;
 
 const ID = "7b1f0f0e-8b8e-4b52-9a57-0f3f5a9d2c11";

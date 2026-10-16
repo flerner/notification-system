@@ -67,9 +67,7 @@ type Tally = {
   retriesByCaller: number;
 };
 
-const TARGETS: [userId: string, channel: string][] = [
-  ["1", "email"], ["2", "email"], ["1", "sms"], ["3", "sms"], ["1", "push"], ["2", "push"],
-];
+let TARGETS: [userId: string, channel: string][] = [];
 
 class Load {
   readonly tally: Tally = {
@@ -270,7 +268,12 @@ async function main() {
     await db.query("TRUNCATE notifications, idempotency_keys");
     await compose(["exec", "-T", "redis", "redis-cli", "eval", "for _,k in ipairs(redis.call('keys','ratelimit:*')) do redis.call('del',k) end", "0"]);
     await purgeQueues();
-    await fetch(`${API}/users/2/devices`, {
+    const idOf = async (column: "email" | "phone", value: string) =>
+      String((await db.query(`SELECT id FROM users WHERE ${column} = $1`, [value])).rows[0]?.id);
+    const [ana, bob, third] = [await idOf("email", "ana@example.com"), await idOf("email", "bob@example.com"), await idOf("phone", "+14155550103")];
+    if ([ana, bob, third].includes("undefined")) throw new Error("the demo users are missing: run `npm run seed` first");
+    TARGETS = [[ana, "email"], [bob, "email"], [ana, "sms"], [third, "sms"], [ana, "push"], [bob, "push"]];
+    await fetch(`${API}/users/${bob}/devices`, {
       method: "POST",
       headers: { authorization: AUTH, "content-type": "application/json" },
       body: JSON.stringify({ platform: "ios", token: "invalid-token-chaos" }),
