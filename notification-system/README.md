@@ -85,6 +85,15 @@ npm run demo:chaos -- --workers 3          # about 5 minutes: load, a spike, the
 Open Grafana while the demo runs; each phase prints what to watch. Use `--scale 0.4` for a shorter run. The demo
 empties the notifications table and recreates the api and worker containers, and restores them at the end.
 
+The load test sends a fixed rate of requests and then measures delivery:
+
+```bash
+npm run load-test -- --rate 300 --seconds 30   # a steady rate, then how long delivery takes; try --rate 500
+```
+
+It reports the API's response times (p50, p95, p99), the peak backlog and the delivery rate, and ends in checks. It uses mock
+providers and runs everything on your machine, so it shows where the system saturates here, not what a deployment would do.
+
 ## Tests
 
 ```bash

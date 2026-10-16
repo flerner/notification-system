@@ -190,8 +190,7 @@ Left out on purpose, because it would add code without adding a design idea:
 
 Known limits of what is built:
 
-- **Not load-tested.** The sizing in section 1 is arithmetic, not a measurement. The chaos demo proves nothing is lost under failure, at a
-  few requests per second on one machine with mock providers. Postgres writes are where I would expect the first limit (section 9, scaling).
+- **Measured only on one laptop.** `npm run load-test` sends a fixed rate of requests and reports the API's response times, the backlog, and how long delivery takes. With mock providers, 3 workers and everything on one machine, the system **took in about 300 requests per second cleanly** (p95 about 350 ms, all delivered within a second of the load stopping) and **topped out at about 400 to 460 per second**; above that, response times climb to a second or more. The limit was the API (one Node process using about one core) and Postgres (about 1.5 cores); the workers sat at about 30% each. Some runs near the limit also had multi-second stalls, and a few answered 500, which I did not diagnose. So the stated peak of about 2,000 per second was **not reached** here: it would need several API instances and a larger Postgres, which this setup cannot show.
 - A `FAILED` notification is final, and there is **no replay tool**. A notification that failed because the _provider_ was
   unhealthy (all attempts used) is a good candidate to resend; one the provider refused is not. The reason is recorded.
 - There is **no expiry**: a notification waiting behind a provider outage is delivered whenever it recovers, even hours late.
