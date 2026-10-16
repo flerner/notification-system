@@ -8,14 +8,13 @@ cannot be delivered ends up in a dead-letter queue.
 
 TypeScript, Express 5, PostgreSQL, RabbitMQ, Redis, Prometheus and Grafana, all in Docker Compose.
 
-- **[DESIGN.md](DESIGN.md)**: the architecture, the trade-offs, what is not done, and how AI was used.
-- [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md): a guided tour of the code, following a user and a notification.
+- **[DESIGN.md](DESIGN.md)**: the architecture, the trade-offs, what is not done, and how AI was used. Start here; it is about a 15-minute read, and the rest is reference.
 - [docs/FLOWS.md](docs/FLOWS.md): sequence diagrams of every flow.
 - [docs/DECISIONS.md](docs/DECISIONS.md): the full decision log.
 
 ## Run it
 
-You need Docker with Compose v2. Node 20 or later is needed only for the helper scripts (seeding, tests, demos).
+You need Docker with Compose v2. Node is needed only for the helper scripts: 18 or later runs the seed and the demos, and 20 or later is needed for the tests.
 
 ```bash
 cd notification-system
@@ -120,6 +119,7 @@ them all with comments). The ones below can be overridden from the shell when st
 | `BREAKER_FAILURE_THRESHOLD`, `BREAKER_COOLDOWN_MS` | `5`, `30000` | Circuit breaker per provider. |
 | `RATE_LIMIT_PUSH`, `_SMS`, `_EMAIL` | `20/3600`, `5/3600`, `10/3600` | At most that many notifications per user and channel in that many seconds. |
 | `MOCK_LATENCY_MS`, `MOCK_FAILURE_RATE` | `50`, `0` | How the mock providers behave. |
+| `LOG_LEVEL`, `RELAY_INTERVAL_MS` | `info`, `5000` | Log verbosity of the api, and how often the api republishes what was stored but not queued (and what is scheduled). |
 
 ## If something does not start
 
@@ -140,8 +140,6 @@ src/clients/        the services allowed to call the API, and their credentials
 src/infra/          configuration, RabbitMQ, cache, migrations, health, metrics
 migrations/         plain SQL, applied in order when the api starts
 observability/      Prometheus, alert rules, Grafana (provisioned from files)
-scripts/            seed, demos, load generator, dashboard generator
+scripts/            seed, the chaos demo and the load test, traffic generator, dashboard generator
 test/               unit and integration tests
 ```
-
-[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) explains which file does what, with links into the code.

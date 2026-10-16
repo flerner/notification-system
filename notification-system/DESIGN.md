@@ -1,9 +1,8 @@
 # Design
 
 A notification system for push, SMS and email, from Chapter 10 of _System Design Interview_ (Alex Xu). This document
-explains what it does, how it is built, why, and what it does not do. To run it, see the [README](README.md). For a tour
-of the code, see [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md); for every decision in full, [docs/DECISIONS.md](docs/DECISIONS.md)
-(referred to below as D-nn); for sequence diagrams, [docs/FLOWS.md](docs/FLOWS.md).
+explains what it does, how it is built, why, and what it does not do. To run it, see the [README](README.md). For every decision in full, see
+[docs/DECISIONS.md](docs/DECISIONS.md) (referred to below as D-nn); for sequence diagrams, [docs/FLOWS.md](docs/FLOWS.md).
 
 ## 1. What it has to do
 
@@ -39,7 +38,7 @@ Book: Figure 10-14. Same parts: notification servers, a database and cache moved
 queues per notification type, workers, third-party services, and the additions (authentication, rate limiting, retries,
 templates, monitoring).
 
-**What a notification goes through** (the code for each step is in the [walkthrough](docs/WALKTHROUGH.md)):
+**What a notification goes through** (the code is in `src/notifications`, with the HTTP side in `src/api`):
 
 1. A client calls `POST /v1/notifications`. The API checks its credentials and the request.
 2. It looks up the user's destinations for the channel, fills in the template if there is one, and stores one row per
@@ -81,7 +80,7 @@ for at-least-once delivery with idempotent processing, and I accept a rare dupli
 | A provider refuses a notification for good (an invalid token) | `FAILED` at once, with no retries, and a message on the dead-letter queue.                                                                                                  |
 | A provider is slow                                            | Every call has a timeout; a timeout counts as a temporary failure.                                                                                                          |
 | Redis is down                                                 | Templates are read from Postgres. The rate limiter lets notifications through and counts the failure.                                                                       |
-| Postgres is down                                              | **Not handled gracefully**: the API cannot store anything and answers with an error.                                                                                        |
+| Postgres is down                                              | **Not handled gracefully**: the API cannot store anything and answers 500, and workers put their messages back. Both reconnect by themselves when it returns (an error on an idle connection is logged, not fatal). |
 
 ## 4. The decisions that matter, and what they cost
 
@@ -170,10 +169,12 @@ dead-letter queue, a growing backlog, an open circuit, a high failure rate, Redi
   notification, a message really coming back from a retry queue after its delay, a rate-limit counter that counts exactly under
   50 concurrent callers. `npm run test:integration` runs them, in a separate `notifications_test` database; a plain `npm test` skips them.
 - **A chaos demo** (`npm run demo:chaos -- --workers 3`) drives load and a spike, then kills a worker, takes down RabbitMQ and Redis,
-  and makes the provider flaky and then dead, and finishes with a verdict. One run: 735 requests, all accepted;
-  996 notifications stored, exactly the 996 the API reported; 864 sent and 132 failed on purpose (an invalid device token and
+  and makes the provider flaky and then dead, and finishes with a verdict. One run: 606 requests, all accepted;
+  813 notifications stored, exactly the 813 the API reported; 722 sent and 91 failed on purpose (an invalid device token and
   a failing provider); none stuck; no server error; none sent twice by racing workers. The load generator retries every
   unanswered request with the same idempotency key, as a good caller would.
+- **A load test** (`npm run load-test`) sends a fixed rate of requests and measures response times, backlog and delivery time. Its results, and
+  what they do not show, are in section 9.
 
 What the tests did not show me: behaviour under real network conditions, and anything involving a real provider.
 
@@ -191,6 +192,9 @@ Left out on purpose, because it would add code without adding a design idea:
 Known limits of what is built:
 
 - **Measured only on one laptop.** `npm run load-test` sends a fixed rate of requests and reports the API's response times, the backlog, and how long delivery takes. With mock providers, 3 workers and everything on one machine, the system **took in about 300 requests per second cleanly** (p95 about 350 ms, all delivered within a second of the load stopping) and **topped out at about 400 to 460 per second**; above that, response times climb to a second or more. The limit was the API (one Node process using about one core) and Postgres (about 1.5 cores); the workers sat at about 30% each. Some runs near the limit also had multi-second stalls, and a few answered 500, which I did not diagnose. So the stated peak of about 2,000 per second was **not reached** here: it would need several API instances and a larger Postgres, which this setup cannot show.
+- Every request looks the client up in Postgres to authenticate it. A short-lived cache of the key would remove that read at the price of a
+  delay before a revoked key stops working; I kept the read because correctness matters more here and nothing was load-tested at volume.
+- The routes for users, devices and settings (`/users/...`) are not under `/v1` like notifications and templates: an inconsistency, not a decision.
 - A `FAILED` notification is final, and there is **no replay tool**. A notification that failed because the _provider_ was
   unhealthy (all attempts used) is a good candidate to resend; one the provider refused is not. The reason is recorded.
 - There is **no expiry**: a notification waiting behind a provider outage is delivered whenever it recovers, even hours late.
@@ -214,8 +218,7 @@ choices were made together.
 
 **Decided, run and verified, milestone by milestone.** Each part was worked out side by side: the options were weighed together and the
 reasons went into the decision log as we went. The paths where a wrong result would be silent (the atomic claim and lease, the
-idempotency key stored in the same transaction, the retry queues, the rate-limit script) were reviewed most closely, and
-[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) documents how they work. Every milestone was also run against the real stack, not only the
+idempotency key stored in the same transaction, the retry queues, the rate-limit script) were reviewed most closely. Every milestone was also run against the real stack, not only the
 tests: the broker stopped, workers killed, Redis stopped, a dashboard looked at in a browser.
 
 **AI output was changed when it did not fit.** There were many such changes along the way. Examples: the providers were moved to a
