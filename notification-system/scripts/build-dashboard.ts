@@ -60,10 +60,10 @@ const q = (p: number, metric: string, by: string) => `histogram_quantile(${p}, s
 
 const panels = [
   row("At a glance", 0),
-  stat("Sent (5 min)", "Notifications the providers accepted in the last 5 minutes. If it stays at 0 while requests are coming in, nothing is being delivered.", 0, 1, "round(sum(increase(notifications_sent_total[5m])))", [[null, "blue"]], "short", 5),
+  stat("Sent (selected range)", "Notifications the providers accepted during the time range chosen at the top right. If it stays at 0 while requests are coming in, nothing is being delivered.", 0, 1, "round(sum(increase(notifications_sent_total[$__range])))", [[null, "blue"]], "short", 5),
   stat("Waiting in queues", "Messages waiting for a worker, across the main queues. If it keeps growing, workers are too slow, so add workers.", 5, 1, `sum(rabbitmq_queue_messages_ready{${MAIN}})`, [[null, "green"], [100, "yellow"], [1000, "red"]], "short", 5),
   stat("Dead-letter queue", "Notifications given up on, and messages that could not be read. Should be 0.", 10, 1, 'sum(rabbitmq_queue_messages_ready{queue="dead-letter"})', [[null, "green"], [1, "red"]], "short", 5),
-  stat("Failed for good (5 min)", "Given up on: a permanent error, or every attempt failed. Anything above 0 deserves a look.", 15, 1, "round(sum(increase(notifications_failed_total[5m])))", [[null, "green"], [1, "red"]], "short", 5),
+  stat("Failed for good (selected range)", "Given up on during the time range chosen at the top right: a permanent error, or every attempt failed. Anything above 0 deserves a look.", 15, 1, "round(sum(increase(notifications_failed_total[$__range])))", [[null, "green"], [1, "red"]], "short", 5),
   stat("Workers listening", "The fewest workers serving any channel. 0 means some channel has nobody delivering it.", 20, 1, `min(sum by (queue) (rabbitmq_queue_consumers{${MAIN}}))`, [[null, "red"], [1, "green"]], "short", 4),
 
   row("Flow", 5),
