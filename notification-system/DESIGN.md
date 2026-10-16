@@ -155,7 +155,7 @@ error, never a half-filled message. A skipped notification is not an error: it i
 Every notification has a status in Postgres, so the question "where is it?" is a query. Each process counts events
 (accepted, sent, failed by reason, skipped by reason, retries, duplicates recognised, provider and end-to-end times) and
 serves them on an internal port; Prometheus collects them and RabbitMQ's own queue depths, and Grafana shows a dashboard
-of nine panels built around four questions: is it keeping up, is anything being given up on, is it fast enough, what is
+of ten panels built around four questions: is it keeping up, is anything being given up on, is it fast enough, what is
 the traffic doing ([screenshot](docs/grafana-dashboard.png)). The first version had 23 panels; most of them answered
 questions nobody had asked, so I removed them (the metrics are still collected). Alert rules cover a non-empty
 dead-letter queue, a growing backlog, an open circuit, a high failure rate, Redis failing and a service down.
@@ -223,5 +223,5 @@ tests: the broker stopped, workers killed, Redis stopped, a dashboard looked at 
 
 **AI output was changed when it did not fit.** There were many such changes along the way. Examples: the providers were moved to a
 top-level folder, the cache was kept to templates only instead of also caching user and device data, and the dashboard was cut from
-23 panels to 9. The decision log ([docs/DECISIONS.md](docs/DECISIONS.md)) was kept as the system was built, so the reasons are recorded
+23 panels to 10. The decision log ([docs/DECISIONS.md](docs/DECISIONS.md)) was kept as the system was built, so the reasons are recorded
 when the decisions were made.

@@ -31,6 +31,61 @@
     {
       "id": 2,
       "type": "stat",
+      "title": "Sent (5 min)",
+      "description": "Notifications the providers accepted in the last 5 minutes. If it stays at 0 while requests are coming in, nothing is being delivered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "round(sum(increase(notifications_sent_total[5m])))",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "blue"
+              }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
       "title": "Waiting in queues",
       "description": "Messages waiting for a worker, across the main queues. If it keeps growing, workers are too slow, so add workers.",
       "datasource": {
@@ -39,8 +94,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 0,
+        "w": 5,
+        "x": 5,
         "y": 1
       },
       "targets": [
@@ -92,7 +147,7 @@
       }
     },
     {
-      "id": 3,
+      "id": 4,
       "type": "stat",
       "title": "Dead-letter queue",
       "description": "Notifications given up on, and messages that could not be read. Should be 0.",
@@ -102,8 +157,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 6,
+        "w": 5,
+        "x": 10,
         "y": 1
       },
       "targets": [
@@ -151,7 +206,7 @@
       }
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "stat",
       "title": "Failed for good (5 min)",
       "description": "Given up on: a permanent error, or every attempt failed. Anything above 0 deserves a look.",
@@ -161,8 +216,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 12,
+        "w": 5,
+        "x": 15,
         "y": 1
       },
       "targets": [
@@ -210,7 +265,7 @@
       }
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "stat",
       "title": "Workers listening",
       "description": "The fewest workers serving any channel. 0 means some channel has nobody delivering it.",
@@ -220,8 +275,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 18,
+        "w": 4,
+        "x": 20,
         "y": 1
       },
       "targets": [
@@ -269,7 +324,7 @@
       }
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "row",
       "title": "Flow",
       "collapsed": false,
@@ -282,7 +337,7 @@
       "panels": []
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "Accepted vs sent (per second)",
       "description": "Accepted by the API vs handed to a provider, by channel. If sent stays below accepted for long, a backlog is building.",
@@ -341,7 +396,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "What becomes of notifications (per second)",
       "description": "Every attempt ends here: sent, failed for good, skipped on purpose (opt-out or rate limit), or scheduled for a retry.",
@@ -418,7 +473,7 @@
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "row",
       "title": "Queues and speed",
       "collapsed": false,
@@ -431,7 +486,7 @@
       "panels": []
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "timeseries",
       "title": "Waiting for a worker, by queue",
       "description": "Ready messages per main queue: which channel is backing up.",
@@ -481,7 +536,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "timeseries",
       "title": "Accepted to sent (p50 and p95)",
       "description": "Time from the API storing a notification to the provider taking it. Includes queueing and retry waits, so a retried notification shows up in the tail.",
@@ -540,7 +595,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "state-timeline",
       "title": "Provider circuit breakers",
       "datasource": {
