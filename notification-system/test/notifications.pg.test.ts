@@ -60,8 +60,8 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     const [a, b] = await repo.insertPending([row(), row()]);
     await repo.claim(a!.id, 60_000);
     await repo.claim(b!.id, 60_000);
-    expect(await repo.markSent(a!.id)).toBe(true);
-    expect(await repo.markFailed(b!.id, "provider unavailable")).toBe(true);
+    expect(await repo.markSent(a!.id, 1)).toBe(true);
+    expect(await repo.markFailed(b!.id, 1, "provider unavailable")).toBe(true);
 
     const { rows } = await pool.query("SELECT id, status, sent_at IS NOT NULL AS sent, last_error FROM notifications");
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
@@ -159,7 +159,7 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     it("answers done for a finished notification and missing for an unknown one", async () => {
       const [n] = await repo.insertPending([row()]);
       await repo.claim(n!.id, 60_000);
-      await repo.markSent(n!.id);
+      await repo.markSent(n!.id, 1);
 
       expect((await repo.claim(n!.id, 60_000)).outcome).toBe("done");
       expect((await repo.claim("00000000-0000-0000-0000-000000000000", 60_000)).outcome).toBe("missing");
@@ -167,8 +167,8 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
 
     it("refuses illegal status changes: cannot mark an unclaimed notification SENT", async () => {
       const [n] = await repo.insertPending([row()]);
-      expect(await repo.markSent(n!.id)).toBe(false);
-      expect(await repo.markFailed(n!.id, "x")).toBe(false);
+      expect(await repo.markSent(n!.id, 1)).toBe(false);
+      expect(await repo.markFailed(n!.id, 1, "x")).toBe(false);
       const { rows } = await pool.query("SELECT status FROM notifications WHERE id = $1", [n!.id]);
       expect(rows[0].status).toBe("PENDING");
     });
@@ -176,16 +176,16 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     it("does not let a finished notification change again", async () => {
       const [n] = await repo.insertPending([row()]);
       await repo.claim(n!.id, 60_000);
-      await repo.markSent(n!.id);
-      expect(await repo.markFailed(n!.id, "late")).toBe(false);
+      await repo.markSent(n!.id, 1);
+      expect(await repo.markFailed(n!.id, 1, "late")).toBe(false);
     });
 
     it("parks a failed attempt as RETRYING, and a worker can claim it again", async () => {
       const [n] = await repo.insertPending([row()]);
-      expect(await repo.markRetrying(n!.id, "503")).toBe(false); // not claimed yet: illegal
+      expect(await repo.markRetrying(n!.id, 1, "503")).toBe(false); // not claimed yet: illegal
       await repo.claim(n!.id, 60_000);
 
-      expect(await repo.markRetrying(n!.id, "503 service unavailable")).toBe(true);
+      expect(await repo.markRetrying(n!.id, 1, "503 service unavailable")).toBe(true);
       const { rows } = await pool.query("SELECT status, last_error, lease_expires_at FROM notifications WHERE id = $1", [n!.id]);
       expect(rows[0]).toMatchObject({ status: "RETRYING", last_error: "503 service unavailable", lease_expires_at: null });
 
@@ -197,28 +197,28 @@ describe.skipIf(!url)("PgNotificationRepository (real Postgres)", () => {
     it("a RETRYING notification is not finished: only a claim can move it on", async () => {
       const [n] = await repo.insertPending([row()]);
       await repo.claim(n!.id, 60_000);
-      await repo.markRetrying(n!.id, "503");
-      expect(await repo.markSent(n!.id)).toBe(false);
-      expect(await repo.markFailed(n!.id, "x")).toBe(false);
+      await repo.markRetrying(n!.id, 1, "503");
+      expect(await repo.markSent(n!.id, 1)).toBe(false);
+      expect(await repo.markFailed(n!.id, 1, "x")).toBe(false);
     });
 
     it("records a skipped attempt as SKIPPED_OPT_OUT, final, with the reason", async () => {
       const [n] = await repo.insertPending([row()]);
-      expect(await repo.markSkipped(n!.id, "SKIPPED_OPT_OUT", "user opted out")).toBe(false); // not claimed yet
+      expect(await repo.markSkipped(n!.id, 1, "SKIPPED_OPT_OUT", "user opted out")).toBe(false); // not claimed yet
       await repo.claim(n!.id, 60_000);
 
-      expect(await repo.markSkipped(n!.id, "SKIPPED_OPT_OUT", "user 1 opted out of email")).toBe(true);
+      expect(await repo.markSkipped(n!.id, 1, "SKIPPED_OPT_OUT", "user 1 opted out of email")).toBe(true);
 
       const { rows } = await pool.query("SELECT status, last_error, lease_expires_at FROM notifications WHERE id = $1", [n!.id]);
       expect(rows[0]).toMatchObject({ status: "SKIPPED_OPT_OUT", last_error: "user 1 opted out of email", lease_expires_at: null });
       expect((await repo.claim(n!.id, 60_000)).outcome).toBe("done"); // never claimed again
-      expect(await repo.markSent(n!.id)).toBe(false);
+      expect(await repo.markSent(n!.id, 1)).toBe(false);
     });
 
     it("records a notification over the rate limit as SKIPPED_RATE_LIMITED, final", async () => {
       const [n] = await repo.insertPending([row()]);
       await repo.claim(n!.id, 60_000);
-      expect(await repo.markSkipped(n!.id, "SKIPPED_RATE_LIMITED", "rate limit reached")).toBe(true);
+      expect(await repo.markSkipped(n!.id, 1, "SKIPPED_RATE_LIMITED", "rate limit reached")).toBe(true);
 
       const { rows } = await pool.query("SELECT status, last_error FROM notifications WHERE id = $1", [n!.id]);
       expect(rows[0]).toMatchObject({ status: "SKIPPED_RATE_LIMITED", last_error: "rate limit reached" });

@@ -127,6 +127,59 @@ describe("idempotency (layer 2)", () => {
     expect(results.every((r) => r === "done" || r === "busy")).toBe(true);
   });
 
+  describe("a worker whose lease ran out", () => {
+    // Worker A is slow and its lease runs out; worker B takes over and is itself still sending
+    // when A's provider call ends. Each provider call is held open until the test releases it.
+    function held() {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      return { gate, release };
+    }
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+
+    async function bTakesOver() {
+      const n = await store();
+      const a = held();
+      const slowA = new ScriptedProvider("a");
+      slowA.behaviour = () => a.gate;
+      const workerA = build(slowA).process(n.id, "email");
+      await tick();
+
+      clock += LEASE + 1;
+      const b = held();
+      const slowB = new ScriptedProvider("b");
+      slowB.behaviour = () => b.gate;
+      const workerB = build(slowB).process(n.id, "email");
+      await tick();
+      expect(row()).toMatchObject({ status: "SENDING", attempts: 2 });
+      return { a, b, slowA, workerA, workerB };
+    }
+
+    it("cannot park the notification for a retry while the worker that took over is sending", async () => {
+      const { a, b, slowA, workerA, workerB } = await bTakesOver();
+      slowA.behaviour = () => Promise.reject(new ProviderError("503 service unavailable", true));
+      a.release();
+      expect(await workerA).toBe("done");
+
+      expect(row()).toMatchObject({ status: "SENDING", attempts: 2 });
+      expect(publisher.published).toEqual([]);
+      b.release();
+      expect(await workerB).toBe("done");
+      expect(row()).toMatchObject({ status: "SENT", attempts: 2 });
+    });
+
+    it("cannot record its late success over the worker that took over", async () => {
+      const { a, b, workerA, workerB } = await bTakesOver();
+      a.release();
+      expect(await workerA).toBe("done");
+      expect(row()).toMatchObject({ status: "SENDING", attempts: 2 });
+
+      b.release();
+      expect(await workerB).toBe("done");
+      expect(row()).toMatchObject({ status: "SENT", attempts: 2 });
+    });
+  });
+
   it("answers busy, not done, while another worker holds a live claim", async () => {
     const n = await store();
     await repo.claim(n.id, LEASE);

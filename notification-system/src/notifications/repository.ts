@@ -55,14 +55,18 @@ export interface NotificationRepository {
   findUnpublished(olderThanMs: number, limit: number): Promise<Notification[]>;
 
   claim(id: string, leaseMs: number): Promise<ClaimResult>;
-  markSent(id: string): Promise<boolean>;
-  markFailed(id: string, error: string): Promise<boolean>;
+  // The outcome of an attempt is recorded only by the worker that holds it: `attempt` is the number
+  // claim() returned, and a write from an earlier attempt (a worker whose lease ran out) is refused.
+  // Every mark returns false when it was refused.
+  markSent(id: string, attempt: number): Promise<boolean>;
+  markFailed(id: string, attempt: number, error: string): Promise<boolean>;
   markSkipped(
     id: string,
+    attempt: number,
     status: SkippedStatus,
     detail: string,
   ): Promise<boolean>;
-  markRetrying(id: string, error: string): Promise<boolean>;
+  markRetrying(id: string, attempt: number, error: string): Promise<boolean>;
 }
 
 const COLUMNS = `id, request_id AS "requestId", user_id AS "userId", client_id AS "clientId", channel, platform,
@@ -153,6 +157,8 @@ export class PgNotificationRepository implements NotificationRepository {
       `SELECT ${COLUMNS} FROM notifications
        WHERE published_at IS NULL
          AND send_at <= now()
+         -- Relies on an immediate notification having send_at = created_at (both default to now() in the
+         -- insert's transaction): a later send_at means scheduled, which has no in-flight publish to wait for.
          AND (send_at > created_at OR created_at < now() - ($1 * interval '1 millisecond'))
        ORDER BY send_at LIMIT $2`,
       [olderThanMs, limit],
@@ -181,39 +187,40 @@ export class PgNotificationRepository implements NotificationRepository {
     return { outcome: isTerminal(current[0].status) ? "done" : "busy" };
   }
 
-  async markSent(id: string): Promise<boolean> {
+  async markSent(id: string, attempt: number): Promise<boolean> {
     const { rowCount } = await this.db.query(
       `UPDATE notifications SET status = 'SENT', sent_at = now(), last_error = NULL
-       WHERE id = $1 AND status = ANY($2)`,
-      [id, predecessors("SENT")],
+       WHERE id = $1 AND attempts = $3 AND status = ANY($2)`,
+      [id, predecessors("SENT"), attempt],
     );
     return rowCount === 1;
   }
 
   async markSkipped(
     id: string,
+    attempt: number,
     status: SkippedStatus,
     detail: string,
   ): Promise<boolean> {
     const { rowCount } = await this.db.query(
-      "UPDATE notifications SET status = $2, last_error = $3, lease_expires_at = NULL WHERE id = $1 AND status = ANY($4)",
-      [id, status, detail, predecessors(status)],
+      "UPDATE notifications SET status = $2, last_error = $3, lease_expires_at = NULL WHERE id = $1 AND attempts = $5 AND status = ANY($4)",
+      [id, status, detail, predecessors(status), attempt],
     );
     return rowCount === 1;
   }
 
-  async markRetrying(id: string, error: string): Promise<boolean> {
+  async markRetrying(id: string, attempt: number, error: string): Promise<boolean> {
     const { rowCount } = await this.db.query(
-      "UPDATE notifications SET status = 'RETRYING', last_error = $2, lease_expires_at = NULL WHERE id = $1 AND status = ANY($3)",
-      [id, error, predecessors("RETRYING")],
+      "UPDATE notifications SET status = 'RETRYING', last_error = $2, lease_expires_at = NULL WHERE id = $1 AND attempts = $4 AND status = ANY($3)",
+      [id, error, predecessors("RETRYING"), attempt],
     );
     return rowCount === 1;
   }
 
-  async markFailed(id: string, error: string): Promise<boolean> {
+  async markFailed(id: string, attempt: number, error: string): Promise<boolean> {
     const { rowCount } = await this.db.query(
-      "UPDATE notifications SET status = 'FAILED', last_error = $2 WHERE id = $1 AND status = ANY($3)",
-      [id, error, predecessors("FAILED")],
+      "UPDATE notifications SET status = 'FAILED', last_error = $2 WHERE id = $1 AND attempts = $4 AND status = ANY($3)",
+      [id, error, predecessors("FAILED"), attempt],
     );
     return rowCount === 1;
   }

@@ -12,9 +12,10 @@ function parseBasic(header: string | undefined): { appKey: string; secret: strin
   return { appKey: decoded.slice(0, colon), secret: decoded.slice(colon + 1) };
 }
 
-// answer, whether the header was missing, malformed, the key unknown, the secret wrong or the client
+// Every failure gets the same answer, whether the header was missing, malformed, the key unknown, the secret wrong or the client
 // revoked, so a caller cannot use it to find out which keys exist. On success the client is put on
-// `res.locals.client` for the routes.
+// `res.locals.client` for the routes. Basic auth sends the secret with every request, so in
+// production the API must only be reachable over HTTPS.
 export function requireClient(clients: ClientRepository): RequestHandler {
   return async (req, res, next) => {
     const credentials = parseBasic(req.get("Authorization"));

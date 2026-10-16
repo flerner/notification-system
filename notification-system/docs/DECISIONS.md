@@ -87,7 +87,7 @@ Decisions that relate to Chapter 10 (or the chapters it builds on) carry a `Book
 > **Book:** Ch. 10, "Contact info gathering flow", Figs. 10-7 and 10-8. Own: the idempotent upsert on the token.
 
 - **Why:** APNS/FCM tokens are unique per app install, so `UNIQUE(token)` plus `ON CONFLICT DO UPDATE` makes clients' retries safe, and a token that moves to another account (logout/login) follows the new user instead of failing. This is the first application of the idempotency principle (see D-11 to D-13).
-- **Trade-off:** a token can silently change owner; acceptable because the latest registration is the truth.
+- **Trade-off:** a token can silently change owner; acceptable because the latest registration is the truth. Notifications are stored with the token already copied in, so moving it also skips what is still waiting for the previous owner (`PENDING` or `RETRYING`, status `SKIPPED_STALE_DESTINATION`), in the same transaction as the move. One being sent at that moment is not touched, so a notification already claimed can still reach the new owner. A partial index on waiting push destinations keeps the lookup cheap.
 
 ## D-07
 
@@ -144,6 +144,7 @@ Decisions that relate to Chapter 10 (or the chapters it builds on) carry a `Book
 - `claim()` is one `UPDATE ... WHERE status = ANY(predecessors) AND (status <> 'SENDING' OR lease_expires_at < now())`. Of N concurrent workers exactly one wins (tested with 8 parallel claims). The lease (`CLAIM_LEASE_MS`, default 60 s, must exceed the slowest provider call) lets another worker take over a row whose worker died; killing a worker mid-send and restarting it was verified end to end (attempt 2, SENT, nothing lost).
 - A failed claim has three meanings: `done` (SENT/FAILED, ack and drop the message), `missing` (drop), `busy` (someone holds a live lease). `busy` is NOT acked: it is put back after a delay, because if the holder crashed this message is what makes us notice when the lease expires. Dropping it would lose the notification.
 - **Trade-off:** a `busy` message is re-checked every `requeueDelayMs` (1 s) until the lease resolves: wasteful but simple and correct. A delayed retry queue could replace the polling.
+- **Fencing:** `claim()` returns the attempt number, and every later write (`markSent`, `markRetrying`, `markFailed`, `markSkipped`) must carry it. A worker whose lease ran out and whose notification was taken over cannot overwrite the new holder's result: its write is refused, logged as a lost claim, and discarded.
 - **Accepted duplicate:** re-claiming after lease expiry can send twice if the first attempt had actually gone out. We prefer a possible duplicate to a certain loss (never lose).
 
 ## D-13

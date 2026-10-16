@@ -23,6 +23,10 @@ describe("notification state machine", () => {
     expect(predecessors("SKIPPED_RATE_LIMITED")).toEqual(["SENDING"]);
   });
 
+  it("lets only a waiting notification be skipped because its device moved, never one being sent", () => {
+    expect(predecessors("SKIPPED_STALE_DESTINATION")).toEqual(["PENDING", "RETRYING"]);
+  });
+
   it("never goes back to PENDING", () => {
     expect(predecessors("PENDING")).toEqual([]);
   });
@@ -32,6 +36,6 @@ describe("notification state machine", () => {
   });
 
   it("treats SENT and FAILED as terminal and nothing else", () => {
-    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED", "SKIPPED_OPT_OUT", "SKIPPED_RATE_LIMITED"]);
+    expect(STATUSES.filter(isTerminal)).toEqual(["SENT", "FAILED", "SKIPPED_OPT_OUT", "SKIPPED_RATE_LIMITED", "SKIPPED_STALE_DESTINATION"]);
   });
 });

@@ -30,6 +30,7 @@ export class GuardedProvider {
       await withTimeout(this.provider.send(req), this.timeoutMs);
     } catch (err) {
       if (err instanceof ProviderError && !err.retryable) {
+        // The provider answered and refused this one notification: it is healthy, so not a breaker failure.
         this.breaker.recordSuccess();
         throw err;
       }

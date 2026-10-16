@@ -66,7 +66,7 @@ for at-least-once delivery with idempotent processing, and I accept a rare dupli
 | Where a duplicate comes from                                                                               | What stops it                                                                                                                                                                                                                                                 |
 | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The caller retries a request                                                                               | An optional `Idempotency-Key`, stored in the same transaction as the notifications. The same key and request returns the original answer; a different request with the same key is refused. Keys belong to a client, so no client can read another's request. |
-| The same queue message is delivered twice (a crash before the acknowledgement, the relay publishing twice) | A **claim**: one atomic `UPDATE` moves the notification to `SENDING`. Of any number of workers holding a copy, exactly one wins. The claim carries a **lease**, so if the winner dies another worker takes over after it expires.                             |
+| The same queue message is delivered twice (a crash before the acknowledgement, the relay publishing twice) | A **claim**: one atomic `UPDATE` moves the notification to `SENDING`. Of any number of workers holding a copy, exactly one wins. The claim carries a **lease**, so if the winner dies another worker takes over after it expires. Results are written with the claim's attempt number, so a worker that lost its lease cannot overwrite the new holder's.                             |
 | The worker dies after the provider accepted, before it recorded the result                                 | The notification id is sent to the provider as its idempotency key. A provider that honours it drops the repeat. One that does not will receive a duplicate: this is the window that cannot be closed, and it is the accepted cost.                           |
 
 **What happens when something fails** (the chaos demo, section 8, checks these):
@@ -195,7 +195,7 @@ Known limits of what is built:
   unhealthy (all attempts used) is a good candidate to resend; one the provider refused is not. The reason is recorded.
 - There is **no expiry**: a notification waiting behind a provider outage is delivered whenever it recovers, even hours late.
 - A long provider outage can still exhaust the notifications that were in flight before the circuit opened.
-- Scheduled notifications cannot be cancelled, their contacts are resolved when they are accepted, and they wait if every API
+- Scheduled notifications cannot be cancelled, their contacts are resolved when they are accepted (if a device token moves to another user meanwhile, what is still waiting for the old owner is skipped, D-06), and they wait if every API
   instance is down (the relay lives in the API).
 - Idempotency keys are kept for ever; production would expire them after a day or so.
 - The rate limiter is a fixed window; a sliding window would remove the boundary effect.

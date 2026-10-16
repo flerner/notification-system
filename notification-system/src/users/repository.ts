@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { predecessors } from "../notifications/state.js";
 
 export type Platform = "ios" | "android" | "web";
 
@@ -26,7 +27,11 @@ export interface Contacts {
 export interface UserRepository {
   findContacts(userId: string): Promise<Contacts | null>;
   createUser(input: { email?: string; phone?: string }): Promise<User>;
-  registerDevice(input: { userId: string; platform: Platform; token: string }): Promise<Device>;
+  registerDevice(input: {
+    userId: string;
+    platform: Platform;
+    token: string;
+  }): Promise<Device>;
 }
 
 const UNIQUE_VIOLATION = "23505";
@@ -36,7 +41,10 @@ export class PgUserRepository implements UserRepository {
   constructor(private readonly db: pg.Pool) {}
 
   async findContacts(userId: string): Promise<Contacts | null> {
-    const { rows: users } = await this.db.query("SELECT id, email, phone FROM users WHERE id = $1", [userId]);
+    const { rows: users } = await this.db.query(
+      "SELECT id, email, phone FROM users WHERE id = $1",
+      [userId],
+    );
     if (users.length === 0) return null;
     const { rows: devices } = await this.db.query(
       `SELECT id, user_id AS "userId", platform, token FROM devices WHERE user_id = $1 ORDER BY id`,
@@ -60,23 +68,39 @@ export class PgUserRepository implements UserRepository {
     }
   }
 
-  async registerDevice(input: { userId: string; platform: Platform; token: string }): Promise<Device> {
+  async registerDevice(input: {
+    userId: string;
+    platform: Platform;
+    token: string;
+  }): Promise<Device> {
+    const client = await this.db.connect();
     try {
-      // The token is globally unique. If it already exists we re-point it at this user and
-      // platform instead of failing: the same phone may log into a different account.
-      const { rows } = await this.db.query(
+      await client.query("BEGIN");
+      const { rows } = await client.query(
         `INSERT INTO devices (user_id, platform, token) VALUES ($1, $2, $3)
          ON CONFLICT (token) DO UPDATE
            SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, updated_at = now()
          RETURNING id, user_id AS "userId", platform, token`,
         [input.userId, input.platform, input.token],
       );
+      // What is still waiting for the previous owner would otherwise be delivered to the new one.
+      // A notification being sent right now is not touched: the claim already holds it.
+      await client.query(
+        `UPDATE notifications
+         SET status = 'SKIPPED_STALE_DESTINATION', last_error = 'the device now belongs to another user', lease_expires_at = NULL
+         WHERE channel = 'push' AND destination = $1 AND user_id <> $2 AND status = ANY($3)`,
+        [input.token, input.userId, predecessors("SKIPPED_STALE_DESTINATION")],
+      );
+      await client.query("COMMIT");
       return rows[0];
     } catch (err) {
+      await client.query("ROLLBACK");
       if ((err as { code?: string }).code === FOREIGN_KEY_VIOLATION) {
         throw new UserNotFoundError(`user ${input.userId} not found`);
       }
       throw err;
+    } finally {
+      client.release();
     }
   }
 }

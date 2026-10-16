@@ -290,8 +290,11 @@ stateDiagram-v2
     SENDING --> FAILED: permanent failure or attempts used up
     SENDING --> SKIPPED_OPT_OUT: the user opted out of the channel
     SENDING --> SKIPPED_RATE_LIMITED: the user reached the limit for the channel
+    PENDING --> SKIPPED_STALE_DESTINATION: the device token moved to another user
+    RETRYING --> SKIPPED_STALE_DESTINATION: the device token moved to another user
     SENT --> [*]
     FAILED --> [*]
     SKIPPED_OPT_OUT --> [*]
     SKIPPED_RATE_LIMITED --> [*]
+    SKIPPED_STALE_DESTINATION --> [*]
 ```

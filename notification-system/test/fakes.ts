@@ -116,30 +116,30 @@ export class InMemoryNotificationRepository implements NotificationRepository {
     return { outcome: "claimed", notification: { ...row } };
   }
 
-  async markSent(id: string): Promise<boolean> {
+  async markSent(id: string, attempt: number): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
-    if (!predecessors("SENT").includes(row.status)) return false;
+    if (row.attempts !== attempt || !predecessors("SENT").includes(row.status)) return false;
     Object.assign(row, { status: "SENT", sentAt: new Date(), lastError: undefined });
     return true;
   }
 
-  async markSkipped(id: string, status: SkippedStatus, detail: string): Promise<boolean> {
+  async markSkipped(id: string, attempt: number, status: SkippedStatus, detail: string): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
-    if (!predecessors(status).includes(row.status)) return false;
+    if (row.attempts !== attempt || !predecessors(status).includes(row.status)) return false;
     Object.assign(row, { status, lastError: detail, leaseExpiresAt: undefined });
     return true;
   }
 
-  async markRetrying(id: string, error: string): Promise<boolean> {
+  async markRetrying(id: string, attempt: number, error: string): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
-    if (!predecessors("RETRYING").includes(row.status)) return false;
+    if (row.attempts !== attempt || !predecessors("RETRYING").includes(row.status)) return false;
     Object.assign(row, { status: "RETRYING", lastError: error, leaseExpiresAt: undefined });
     return true;
   }
 
-  async markFailed(id: string, error: string): Promise<boolean> {
+  async markFailed(id: string, attempt: number, error: string): Promise<boolean> {
     const row = this.rows.find((r) => r.id === id)!;
-    if (!predecessors("FAILED").includes(row.status)) return false;
+    if (row.attempts !== attempt || !predecessors("FAILED").includes(row.status)) return false;
     Object.assign(row, { status: "FAILED", lastError: error });
     return true;
   }
